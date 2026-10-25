@@ -61,7 +61,7 @@ python arista-field.py --host 192.168.1.191 --verify-only
 Every run writes a log and, when it downloads, a backup directory:
 
 ```
-c230\field-run-YYYYmmdd-HHMMSS\run.log     screen output, verbatim
+field-run-YYYYmmdd-HHMMSS\run.log         screen output, verbatim
 backups\c230-<mac12>\<stamp>\              the AP's firmware
     manifest.json                          model, version, MAC, per-partition sha256/md5
     SHA256SUMS
@@ -168,7 +168,7 @@ Notes that matter for the C-260:
   its NAND slots last; the C-260 lists slot 0, slot 1, then the NOR. Nothing may
   depend on position: the tool tells NOR from NAND by erase size (64 KiB against
   128 KiB) and skips the UBI volume pseudo-devices a running system exposes.
-  Both models' real tables are checked by `c230\test-layout.py`.
+  Both models' real tables are checked by `test-layout.py` (next to this file).
 - **`pri`.** Arista normally runs a C-260 from slot 1 (`pri=1`), so slot 0 is
   genuinely spare and the install replaces the spare. With `pri=0` the running
   Arista is in slot 0: the installer warns, and the backup taken in step 3 is

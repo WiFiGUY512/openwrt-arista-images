@@ -294,19 +294,45 @@ class _Helpers:
 m = _Helpers()
 
 
-BACKUPS = os.path.abspath(os.path.join(HERE, "..", "backups"))
+def _up(rel, default):
+    """The first of these relative paths that exists, else the last one's parent.
+
+    The script runs from three places: this project (tools/arista-field), a
+    checkout of the published repo (install/), and anywhere somebody copied it
+    to.  So nothing may assume a fixed depth.
+    """
+    for r in rel:
+        d = os.path.abspath(os.path.join(HERE, *r))
+        if os.path.isdir(d):
+            return d
+    return os.path.abspath(os.path.join(HERE, *default))
 
 
 def _find_tools():
-    """The aarch64 mtd tools, wherever this copy of the script lives."""
-    for rel in (("..", "tools", "aarch64"), ("tools", "aarch64"),
-                ("..", "build", "field-tools", "aarch64")):
-        d = os.path.abspath(os.path.join(HERE, *rel))
-        if os.path.isdir(d):
-            return d
-    return os.path.abspath(os.path.join(HERE, "..", "tools", "aarch64"))
+    """The aarch64 mtd tools the revert path needs, wherever they live."""
+    return _up((("tools", "aarch64"), ("..", "tools", "aarch64"),
+                ("..", "..", "build", "field-tools", "aarch64")),
+               ("..", "tools", "aarch64"))
 
 
+def _find_backups():
+    """Where AP firmware is kept: the project's backups/, not next to a copy."""
+    return _up((("..", "..", "backups"), ("..", "backups"), ("backups",)),
+               ("..", "backups"))
+
+
+def _find_releases():
+    """The release cache: the project's firmware/releases, or an older home one."""
+    d = _up((("..", "..", "firmware", "releases"), ("..", "firmware", "releases")),
+            ("..", "firmware", "releases"))
+    if os.path.isdir(d):
+        return d
+    legacy = os.path.join(os.path.expanduser("~"), "arista-openwrt-files")
+    return legacy if os.path.isdir(legacy) else d
+
+
+BACKUPS = _find_backups()
+RELEASES = _find_releases()
 TOOLS = _find_tools()
 
 # Every line goes to the screen with a clock, and every long wait says so out
@@ -1530,7 +1556,7 @@ def main():
     ap.add_argument("--pc-ip", help="this PC as the AP sees it")
     ap.add_argument("--ap-ip", help="the address U-Boot uses (default host/24 .230)")
     ap.add_argument("--tag", help="release tag (default: newest)")
-    ap.add_argument("--files", default=os.path.join(os.path.expanduser("~"), "arista-openwrt-files"))
+    ap.add_argument("--files", default=RELEASES, help="release cache (default: %(default)s)")
     ap.add_argument("--backup-dir", help="where to save the firmware (default backups/<model>-<mac>)")
     ap.add_argument("--backup-only", action="store_true", help="download the firmware and stop")
     ap.add_argument("--verify-only", action="store_true", help="check the AP and stop")
