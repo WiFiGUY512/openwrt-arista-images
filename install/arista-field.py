@@ -592,6 +592,40 @@ class Tftp:
 
 # --- 1. connect --------------------------------------------------------------
 
+def shell_alive(pty, timeout=12):
+    """Is the injected shell still there?  Non-fatal: Arista's upgrade helper
+    kills it after about a minute, and a long backup or a slow answer at the
+    menu can easily outlive it."""
+    if pty is None:
+        return False
+    try:
+        tag = "P" + secrets.token_hex(3)
+        pty.send("echo %s" % tag)
+        return bool(pty.wait(tag, timeout))
+    except Exception:
+        return False
+
+
+def ensure_shell(run, host, user, password, why):
+    """Return a live factory shell, reconnecting if the old one expired."""
+    if shell_alive(run.shell):
+        return run.shell
+    m.say("")
+    m.say("  The AP's shell has gone (Arista's upgrade helper times out after about")
+    m.say("  a minute; %s took longer). Reconnecting." % why)
+    try:
+        run.shell.chan.get_transport().close()
+    except Exception:
+        pass
+    wait_reboot(host, 240)
+    kind, shell, card = connect(host, user, password)
+    if kind != "stock":
+        m.die("the AP came back on %s, not its factory firmware" % kind)
+    run.shell = shell
+    m.say("  reconnected.")
+    return shell
+
+
 class ShellNotReady(Exception):
     """The factory shell accepted the upgrade but never handed back a shell.
 
@@ -1024,6 +1058,7 @@ def download_firmware(pty, card, outdir, include_slot1=True, pc_ip=None, port=80
     compared, so a bad read cannot pass unnoticed."""
     d = MODELS[card["model"]]
     os.makedirs(outdir, exist_ok=True)
+    pty = ensure_shell(run, card.get("host"), run.user, run.password, "the menu")
     recv = Receiver(outdir, port)
     m.say("")
     m.say("Downloading this AP's firmware to %s" % outdir)
@@ -1162,7 +1197,8 @@ def boot_installer(run, card, pc_ip, ap_ip, itb, kind):
             m.die("not confirmed; nothing was written")
 
     if kind == "stock":
-        pty = run.shell
+        pty = ensure_shell(run, card["host"], run.user, run.password,
+                           "the download and the menu")
         # One short command at a time: a single line carrying everything was
         # truncated by the AP's tty, which leaves the shell waiting for the rest
         # of a quoted value while nothing runs (bench unit, 2026-10-25).
@@ -1490,7 +1526,9 @@ def find_ap(prefix, timeout, want_ram=None, skip=(), mac=None):
 # --- the run book ------------------------------------------------------------
 
 class Run:
-    def __init__(self, yes=False, yes_install=False):
+    def __init__(self, yes=False, yes_install=False, user=None, password=None):
+        self.user = user
+        self.password = password
         self.yes = yes
         self.yes_install = yes_install
         self.env_writes = []
@@ -1689,7 +1727,7 @@ def main():
 
     if not a.host and not a.restore and not a.installer_at:
         m.die("give --host (an AP on its factory firmware), --restore DIR, or --installer-at IP")
-    run = Run(a.yes, a.yes_install)
+    run = Run(a.yes, a.yes_install, a.user, a.password)
     work = os.path.abspath("field-run-%s" % time.strftime("%Y%m%d-%H%M%S"))
     os.makedirs(work, exist_ok=True)
     m.LOG.open(os.path.join(work, "run.log"))
@@ -1848,6 +1886,9 @@ def main():
             m.say("  [3] Nothing -- stop here (the firmware is already saved)")
         else:
             m.say("  [2] Nothing -- stop here")
+        m.say("")
+        m.say("  Answer within a minute if you can: Arista's shell expires, and")
+        m.say("  reconnecting costs a reboot of the AP (the tool does it for you).")
         choice = ask("Which? [1/2/3] ", "--install or --restore DIR").strip()
         if choice == "1":
             action = "install"
