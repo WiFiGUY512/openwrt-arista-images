@@ -82,7 +82,9 @@ backups\c230-<mac12>\<stamp>\              the AP's firmware
    write (`bootcmd`, `pri=1`), then NAND slot 0.
 3. For a **revert**: NAND slot 0 (erased and written from the backup) and the
    NOR environment partition `0:APPSBLENV`. Slot 1 and every other NOR partition
-   are left as found.
+   are left as found. This path needs two aarch64 mtd tools; if they are not
+   beside the script, it fetches them from this repository and checks them
+   against the published `SHA256SUMS`. The install path needs nothing extra.
 
 Each write is announced as it happens and totalled at the end.
 

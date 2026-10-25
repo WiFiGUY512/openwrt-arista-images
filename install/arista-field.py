@@ -1193,16 +1193,51 @@ def do_install(run, card, ip, ubi, sums):
 
 # --- 5b. put the AP's own firmware back -------------------------------------
 
+RAW_TOOLS = "https://raw.githubusercontent.com/%s/main/install/tools/aarch64/" % REPO
+
+
+def fetch_tool(name, cache):
+    """Get one mtd binary next to this script if it is not there, and verify it
+    against the published SHA256SUMS.  A single-file download still has to be
+    able to run the revert path."""
+    dest = os.path.join(cache, name)
+    if os.path.exists(dest):
+        return dest
+    os.makedirs(cache, exist_ok=True)
+    m.say("    %s is not on this PC; fetching it from the project's repository" % name)
+    try:
+        with http_get(RAW_TOOLS + "SHA256SUMS") as r:
+            sums = dict(reversed(line.split()) for line in r.read().decode().splitlines() if line.strip())
+        want = sums.get(name)
+        if not want:
+            m.die("%s is not in the published SHA256SUMS" % name)
+        with http_get(RAW_TOOLS + name) as r, open(dest + ".part", "wb") as f:
+            for b in iter(lambda: r.read(1 << 20), b""):
+                f.write(b)
+        got = hashlib.sha256(open(dest + ".part", "rb").read()).hexdigest()
+        if got != want:
+            os.remove(dest + ".part")
+            m.die("%s from the repository does not match its SHA256 (%s)" % (name, got))
+        os.replace(dest + ".part", dest)
+        os.chmod(dest, 0o755)
+        m.say("    %s fetched and verified" % name)
+        return dest
+    except Exception as e:                            # noqa: BLE001
+        m.die("no %s in %s and it could not be fetched (%s).  The revert path needs "
+              "it; the install path does not." % (name, cache, e))
+
+
 def push_tools(con, need=("flash_erase", "nandwrite")):
     """Put the mtd tools on the RAM installer if its image has none.  They are
-    aarch64/musl builds from this project's own mtd-utils 2.3.1."""
+    aarch64/musl builds from this project's own mtd-utils 2.3.1, published with
+    the installer (install/tools/aarch64/ plus a SHA256SUMS)."""
     have = m.ssh_exec(con, "for t in %s; do command -v $t >/dev/null && echo HAVE-$t || echo MISSING-$t; done"
                       % " ".join(need), 60)[0]
     for t in need:
         if "MISSING-%s" % t in have:
             local = os.path.join(TOOLS, t)
             if not os.path.exists(local):
-                m.die("no %s in %s (the restore needs it)" % (t, TOOLS))
+                local = fetch_tool(t, TOOLS)
             m.say("    sending %s (%.0f KiB)" % (t, os.path.getsize(local) / 1024.0))
             chan = con.get_transport().open_session()
             chan.exec_command("cat > /tmp/%s; chmod +x /tmp/%s" % (t, t))
