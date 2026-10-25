@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Put OpenWrt on an Arista access point in the field -- or put that AP's own
 firmware back -- with no serial cable.
 
@@ -28,11 +28,13 @@ import argparse
 import atexit
 import concurrent.futures
 import contextlib
+import gzip
 import hashlib
 import importlib.util
 import json
 import os
 import re
+import secrets
 import socket
 import struct
 import subprocess
@@ -590,7 +592,54 @@ class Tftp:
 
 # --- 1. connect --------------------------------------------------------------
 
+class ShellNotReady(Exception):
+    """The factory shell accepted the upgrade but never handed back a shell.
+
+    Seen when the AP's previous upgrade helper still holds the terminal: the
+    typed commands then go to the config shell ("Invalid command"), because the
+    eval'd shell never became the foreground process.  Closing the session makes
+    Arista's own helper time out and reboot the AP, so the answer is to wait for
+    that reboot and try again, not to give up."""
+
+
+def wait_reboot(host, up_to=300):
+    """Wait for the AP to go down and come back (its own helper reboots it)."""
+    m.say("  waiting for the AP to restart itself (up to %d s)" % up_to)
+    start = time.time()
+    went_down = False
+    while time.time() - start < up_to:
+        try:
+            socket.create_connection((host, 22), 2).close()
+            if went_down:
+                m.say("  back at %s after %.0f s" % (host, time.time() - start))
+                return True
+        except Exception:
+            if not went_down:
+                went_down = True
+                m.say("  [%ds] the AP is down; waiting for it" % int(time.time() - start))
+        time.sleep(4)
+    return went_down
+
+
 def connect(host, user=None, password=None):
+    """Connect, retrying once through the AP's own restart when its shell is in
+    the leftover-helper state."""
+    for attempt in (1, 2):
+        try:
+            return _connect_once(host, user, password)
+        except ShellNotReady as e:
+            m.say("")
+            m.say("  The upgrade was accepted but the shell never came back.")
+            m.say("  Detail: %s" % str(e).strip()[-200:])
+            if attempt == 2:
+                m.die("the AP keeps answering with its config shell instead of the "
+                      "injected one.  Power-cycle it, wait for it to come up, and run "
+                      "again; nothing has been written to it.")
+            wait_reboot(host)
+            m.say("  trying again.")
+
+
+def _connect_once(host, user=None, password=None):
     """Returns (kind, pty_or_conn, card).  kind is 'stock' or 'openwrt'.
 
     Credentials: OpenWrt as installed here has root with no password; Arista's
@@ -666,9 +715,15 @@ def connect(host, user=None, password=None):
         m.die("no confirm prompt:\n%s" % pty.since(0).strip()[-800:])
     pty.send("y")
     time.sleep(10)
-    out = pty.must("id", 120, "the injected shell")
+    out, rc = pty.run("id", 120)
     if "uid=0" not in out:
-        m.die("the injected shell is not root:\n%s" % out[-400:])
+        # Drop the session: that is what makes Arista's helper give up and
+        # restart the AP, which is the only way out of this state without hands.
+        try:
+            client.close()
+        except Exception:
+            pass
+        raise ShellNotReady(out[-300:] or "(no output)")
     global _STOCK, _STOCK_HOST
     _STOCK = pty
     _STOCK_HOST = host

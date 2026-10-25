@@ -56,6 +56,9 @@ python arista-field.py --installer-at 192.168.1.17 --yes --yes-install
 
 # Check an AP without touching it
 python arista-field.py --host 192.168.1.191 --verify-only
+
+# A unit whose password was changed (Arista: the account is 'config')
+python arista-field.py --host 192.168.1.191 --user config --password <pw>
 ```
 
 Every run writes a log and, when it downloads, a backup directory:
