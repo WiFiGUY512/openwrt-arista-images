@@ -590,13 +590,22 @@ class Tftp:
 
 # --- 1. connect --------------------------------------------------------------
 
-def connect(host):
-    """Returns (kind, pty_or_conn, card).  kind is 'stock' or 'openwrt'."""
+def connect(host, user=None, password=None):
+    """Returns (kind, pty_or_conn, card).  kind is 'stock' or 'openwrt'.
+
+    Credentials: OpenWrt as installed here has root with no password; Arista's
+    factory firmware has `config`, whose factory password is `config` (checked
+    against md5crypt in the C-260's own shadow), and a *locked* root, so root
+    can never log in there.  A unit whose password was changed needs
+    --user/--password."""
     m.say("")
     m.say("Connecting to %s." % host)
-    # An AP already on our OpenWrt has dropbear with root and no password.
+    tried = []
+    if user is not None:
+        tried.append("%s/%s" % (user, "*" * len(password or "")))
+    # An AP already on our OpenWrt has root and no password.
     try:
-        con = m.ssh_open(host, "root", "", timeout=10)
+        con = m.ssh_open(host, user or "root", "" if user else "", timeout=10)
         board = m.ssh_exec(con, "cat /tmp/sysinfo/board_name 2>/dev/null", 20)[0].strip()
         if board.startswith("arista,"):
             rel = m.ssh_exec(con, "cat /etc/openwrt_release 2>/dev/null | tr '\\n' ' '", 20)[0]
@@ -611,11 +620,17 @@ def connect(host):
         pass
 
     # Factory firmware: SSH as config, then the upgrade eval.
+    fuser = user or "config"
+    fpass = password if user else "config"
+    tried.append("%s/%s" % (fuser, "*" * len(fpass or "")))
     try:
-        client = m.ssh_open(host, "config", "config", timeout=10, tries=2, delay=2)
+        client = m.ssh_open(host, fuser, fpass, timeout=10, tries=2, delay=2)
     except Exception as e:
-        m.die("cannot log in to %s as root (OpenWrt) or config (factory): %s\n"
-              "Is the AP up, and at that address?" % (host, e))
+        m.die("cannot log in to %s (tried %s): %s\n"
+              "Is the AP up, and at that address?  On Arista's firmware root is\n"
+              "locked and the account is 'config' (factory password 'config'); if\n"
+              "this unit's was changed, give it with --user config --password ..."
+              % (host, " and ".join(tried), e))
     pty = m.Pty(client.invoke_shell(width=200, height=60))
     if not pty.wait(r"\[config\]\$", 30):
         m.die("%s does not answer with Arista's config shell; not touching it." % host)
@@ -1590,6 +1605,10 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--host", help="the AP's address")
     ap.add_argument("--pc-ip", help="this PC as the AP sees it")
+    ap.add_argument("--user", help="log in as this user (default: root on OpenWrt, "
+                                  "config on Arista's firmware)")
+    ap.add_argument("--password", help="that user's password (default: none on "
+                                      "OpenWrt, 'config' on Arista's firmware)")
     ap.add_argument("--ap-ip", help="the address U-Boot uses (default host/24 .230)")
     ap.add_argument("--tag", help="release tag (default: newest)")
     ap.add_argument("--files", default=RELEASES, help="release cache (default: %(default)s)")
@@ -1679,7 +1698,7 @@ def main():
          "C-230 its /tmp/offline file blocks that command, so clear offline mode.\n"
          "If a unit's shell never offers 'Continue?', the console procedure in the\n"
          "repository README is the way in, and this tool is not.")
-    kind, shell, card = connect(a.host)
+    kind, shell, card = connect(a.host, a.user, a.password)
     run.shell = shell
     card["host"] = a.host
     m.say("  connected: %s" % ("factory firmware" if kind == "stock" else "OpenWrt"))
