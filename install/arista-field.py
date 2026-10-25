@@ -1,6 +1,9 @@
 ﻿#!/usr/bin/env python3
-"""Put OpenWrt on an Arista C-230 in the field -- or put that AP's own firmware
-back -- with no serial cable.
+"""Put OpenWrt on an Arista access point in the field -- or put that AP's own
+firmware back -- with no serial cable.
+
+One script for every model: what differs (FIT configuration, partition names,
+installer, NOR size) is in MODELS, and nothing else is per-model.
 
 The rule this tool is built around: an AP in the wild may be the only copy of
 its own firmware.  So it always downloads the AP's flash first, verifies every
@@ -397,7 +400,6 @@ MODELS = {
     "c230": {
         "name": "C-230",
         "fit_cfg": "config@ac02",
-        "label_if": "lan1",
         "installer": "arista-c230-install",
         "slot0": ("rootfs", "ubi"),
         "slot1": ("rootfs_1",),
@@ -406,6 +408,29 @@ MODELS = {
         "need_env": ("bootcmd", "ba0", "ba1", "ubootscript"),
         "nor_total": 32 * 1024 * 1024,
         "slot_size": 0x10000000,
+    },
+    "c260": {
+        "name": "C-260",
+        # OpenWrt main's FIT for this board has one configuration, config@hk01;
+        # the 25.12 port used config@1.  The images in the release are main.
+        "fit_cfg": "config@hk01",
+        "installer": "arista-c260-install",
+        # Slot 0 is "ubi" in the C-260's device tree (25.12's name) and "rootfs"
+        # in main's; Arista's own firmware calls it "rootfs".  Both are accepted.
+        "slot0": ("rootfs", "ubi"),
+        "slot1": ("rootfs_1",),
+        "appsblenv": ("0:APPSBLENV", "appsblenv"),
+        "need_nor": ("0:HLOS_1",),
+        "need_env": ("bootcmd", "ba0", "ba1", "ubootscript"),
+        # Not measured on a C-260 yet: its NOR has the same partition set as the
+        # C-230's minus DEVCERT, but nobody has recorded the sizes.  None means
+        # "report what you see, do not judge" until a unit has been through it.
+        "nor_total": None,
+        "slot_size": 0x10000000,
+        # Arista normally runs the C-260 from slot 1 (pri=1), so slot 0 is the
+        # spare.  pri=0 means slot 0 holds the running Arista: the installer
+        # warns, and the backup taken first is what makes that recoverable.
+        "pri_note": "Arista usually runs a C-260 from slot 1 (pri=1).",
     },
 }
 
@@ -710,9 +735,14 @@ def verify_stock(pty, card):
         problems.append("no U-Boot environment partition (%s)" % "/".join(d["appsblenv"]))
     if not find_part(card["mtd"], d["need_nor"]):
         problems.append("no %s (the fallback kernel)" % d["need_nor"][0])
-    if sum(r["size"] for r in nor) != d["nor_total"]:
+    nor_bytes = sum(r["size"] for r in nor)
+    if d["nor_total"] is None:
+        m.say("  NOR        %d partitions, %d bytes (no expected total for the %s "
+              "yet; recording it)" % (len(nor), nor_bytes, d["name"]))
+        card["nor_total_seen"] = nor_bytes
+    elif nor_bytes != d["nor_total"]:
         problems.append("NOR partitions add up to %d bytes, expected %d"
-                        % (sum(r["size"] for r in nor), d["nor_total"]))
+                        % (nor_bytes, d["nor_total"]))
     env_text = pty.must("fw_printenv 2>&1", 30, "fw_printenv")
     card["env"] = env_text
     for v in d["need_env"]:
@@ -720,6 +750,13 @@ def verify_stock(pty, card):
             problems.append("the U-Boot environment has no %s" % v)
     card["pri"] = (re.search(r"^pri=(\S+)", env_text, re.M) or [None, "?"])[1] \
         if re.search(r"^pri=(\S+)", env_text, re.M) else "?"
+    m.say("  Arista's primary slot (pri): %s" % card["pri"])
+    if card["pri"] == "0":
+        m.say("  NOTE: %s" % (d.get("pri_note") or
+                              "Arista calls slot 0 its primary, so the system that runs "
+                              "is the one the install replaces."))
+        m.say("        Slot 1 stays as the fallback, and the backup taken next is what")
+        m.say("        puts slot 0 back if you want it.")
     root = pty.must("awk '$2 == \"/\" {print $3; exit}' /proc/mounts", 20, "root fs").strip()
     m.say("  root fs    %s" % root)
     if root not in ("overlay", "rootfs", "tmpfs", "ubifs"):
@@ -1062,9 +1099,10 @@ def do_install(run, card, ip, ubi, sums):
                         % MODELS[card["model"]]["installer"], 60)
     if "ok" not in out:
         m.die("the RAM installer lacks the tools the install needs:\n%s" % out[-300:])
-    m.ssh_must(con, "rm -rf /tmp/c230; mkdir -p /tmp/c230", 60)
-    for local, remote, what in ((sums, "/tmp/c230/SHA256SUMS", "SHA256SUMS"),
-                                (ubi, "/tmp/c230/factory.ubi", "factory.ubi")):
+    stage = "/tmp/" + card["model"]
+    m.ssh_must(con, "rm -rf %s; mkdir -p %s" % (stage, stage), 60)
+    for local, remote, what in ((sums, stage + "/SHA256SUMS", "SHA256SUMS"),
+                                (ubi, stage + "/factory.ubi", "factory.ubi")):
         m.say("  Sending %s (%.1f MiB) to %s over SSH."
               % (what, os.path.getsize(local) / 1048576.0, remote))
         with Heartbeat("sending %s" % what, 10):
@@ -1089,8 +1127,8 @@ def do_install(run, card, ip, ubi, sums):
     m.say("")
     m.say("  Running the installer's own checks (this writes nothing):")
     with Heartbeat("installer dry run", 12):
-        out, _ = m.ssh_exec(con, "%s --dry-run --no-backup --stick /tmp/c230 2>&1"
-                            % MODELS[card["model"]]["installer"], 900)
+        out, _ = m.ssh_exec(con, "%s --dry-run --no-backup --stick %s 2>&1"
+                            % (MODELS[card["model"]]["installer"], stage), 900)
     for line in out.splitlines():
         m.say("    " + line)
     if "INSTALL-RESULT: OK" not in out:
@@ -1100,14 +1138,14 @@ def do_install(run, card, ip, ubi, sums):
     m.say("    1 U-Boot environment write (bootcmd, pri=1)")
     m.say("    NAND slot 0, erased and written with factory.ubi")
     if not run.yes_install and not run.yes:
-        mac = m.ssh_must(con, "cat /sys/class/net/lan1/address", 30).strip().lower()
+        mac = board_mac(con) or "?"   # br-lan/lan1/eth0: whichever the model has
         tail = mac.replace(":", "")[-4:]
         if ask("  Type the last four characters of the MAC on the label (%s): " % mac, "--yes-install").strip().lower() != tail:
             m.die("no match; nothing was written")
     m.say("  Writing slot 0 (erasing 256 MiB and writing back; about a minute):")
     with Heartbeat("writing NAND slot 0", 12):
-        out, _ = m.ssh_exec(con, "%s --yes --no-backup --stick /tmp/c230 2>&1"
-                            % MODELS[card["model"]]["installer"], 1800)
+        out, _ = m.ssh_exec(con, "%s --yes --no-backup --stick %s 2>&1"
+                            % (MODELS[card["model"]]["installer"], stage), 1800)
     for line in out.splitlines():
         m.say("    " + line)
     if "INSTALL-RESULT: OK installed" not in out:
@@ -1563,8 +1601,12 @@ def main():
     step("Connect to the AP",
          "Log in to %s and get a root shell without touching its flash or\n"
          "environment (Arista's config shell, then prep_upgrade.sh's eval)." % a.host,
-         "The AP must be powered, on the network, and on its factory firmware.\n"
-         "If it already runs OpenWrt, use --installer-at <its address> instead.")
+         "The AP must be powered, on the network, and on its factory firmware,\n"
+         "and in online mode (Arista's /tmp/offline blocks its upgrade command).\n"
+         "If it already runs OpenWrt, use --installer-at <its address> instead.\n"
+         "The eval this uses has only been proven on the C-230: if a C-260's config\n"
+         "shell will not take its upgrade path, the console procedure in the\n"
+         "repository README is the way in, and this tool is not.")
     kind, shell, card = connect(a.host)
     run.shell = shell
     card["host"] = a.host
@@ -1700,7 +1742,7 @@ def main():
               "this AP's own boot; check the AP is up, then run again with --host.")
     run.installer = con
     m.say("  RAM installer up at %s (%s)." % (ip, board))
-    m.say("  It takes its address from DHCP on its LAN1; with no DHCP server on")
+    m.say("  It takes its address from DHCP on its LAN port; with no DHCP server on")
     m.say("  that segment it cannot be reached, and the AP is unchanged.")
 
     if action == "install":

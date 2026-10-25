@@ -1,49 +1,26 @@
-﻿# arista-field.py: an automated installer for Arista C-230 / C-260
+# arista-field.py: an automated installer for Arista C-230 / C-260
 
-One file, no console cable. It verifies the AP, downloads that AP's own firmware
-and checks it, then either installs OpenWrt or puts the original firmware back.
+One file, no console cable, one script for every model. It verifies the AP,
+downloads that AP's own firmware and checks it, then either installs OpenWrt or
+puts the original firmware back.
 
 ## Getting it
 
 Published here: <https://github.com/WiFiGUY512/openwrt-arista-images/tree/main/install>
 (script: <https://raw.githubusercontent.com/WiFiGUY512/openwrt-arista-images/main/install/arista-field.py>).
 
-If it has to run without a terminal (a script, a CI job), say what to do on the
-command line: `--install`, `--restore DIR`, `--backup-only`, `--yes`,
-`--yes-install`.  A prompt with no terminal to ask on is an error, not a wait.
-
-```sh
+\\sh
 curl -O https://raw.githubusercontent.com/WiFiGUY512/openwrt-arista-images/main/install/arista-field.py
 python -m pip install paramiko
-```
-
-Needs Python 3 and `paramiko`. The images come from this repository's releases,
+\
+Needs Python 3 and \paramiko\. The images come from this repository's releases,
 so nothing else has to be downloaded by hand.
 
-```sh
-python arista-field.py --host 192.168.1.191                 # menu: install or revert
-python arista-field.py --host 192.168.1.191 --backup-only   # just save its firmware
-```
-
-This automates the console-and-TFTP procedure in the repository's main README:
-the same RAM installer, the same `arista-c230-install`, but driven over the
-network, with the AP's firmware saved first and the choice made afterwards.
+If it has to run without a terminal (a script, a CI job), say what to do on the
+command line: \--install\, \--restore DIR\, \--backup-only\, \--yes\,
+\--yes-install\. A prompt with no terminal to ask on is an error, not a wait.
 
 ---
-`arista-field.py` puts OpenWrt on an Arista C-230 **or puts that AP's own
-firmware back**, over the network, with no serial cable.
-
-It is built around one rule: **an AP in the wild may be the only copy of its own
-firmware.** So it downloads the AP's flash first, verifies every byte of it, and
-only then offers to change anything.
-
-Tested end to end on the bench unit (MAC `30:86:2d:73:b6:6f`) on 2026-10-25,
-both directions:
-
-| Run | Result |
-|---|---|
-| stock 8.9.0-63.1 → OpenWrt | installed, came up at its DHCP address, found by MAC |
-| OpenWrt → its own firmware | slot 0 and environment read back **byte-identical** to the backup, booted Arista 8.9.0-63.1 |
 
 ## What it needs
 
@@ -166,4 +143,37 @@ without writing anything.
   GitHub API; without the flag the tool also falls back to the cache if GitHub
   cannot be reached. Copy `arista-openwrt-files\` to the laptop beforehand.
 
+## C-260
 
+Same command, same file; the model is read from the AP.
+
+```sh
+python arista-field.py --host 192.168.1.191 --backup-only   # save it first
+python arista-field.py --host 192.168.1.191                 # then choose
+```
+
+What is per-model lives in `MODELS` and nowhere else:
+
+| | C-230 | C-260 |
+|---|---|---|
+| FIT configuration | `config@ac02` | `config@hk01` |
+| slot 0 name | `rootfs` | `ubi` in 25.12's tree, `rootfs` in main's (both accepted) |
+| installer | `arista-c230-install` | `arista-c260-install` |
+| NOR total | 32 MiB, checked | not recorded yet, so reported and not judged |
+
+Notes that matter for the C-260:
+
+- **`pri`.** Arista normally runs a C-260 from slot 1 (`pri=1`), so slot 0 is
+  genuinely spare and the install replaces the spare. With `pri=0` the running
+  Arista is in slot 0: the installer warns, and the backup taken in step 3 is
+  what puts it back.
+- **No USB stick needed.** The C-260's installer wants a stick when it takes its
+  own backup; this tool passes `--no-backup` and keeps the backup here instead,
+  so `/tmp` on the AP is enough.
+- **Status.** The C-260 path has not been through a unit yet. Two things are
+  unproven on that model: the factory-shell eval this tool logs in with (proven
+  on the C-230 only), and the NOR size it reports. Everything the installer then
+  does is the C-260's own, already tested script. The first run on a unit should
+  be `--backup-only` first, which writes nothing.
+- The fallback is the same shape as the C-230's: the netboot `bootcmd` restores
+  Arista's own boot and resets if the TFTP fetch fails.
