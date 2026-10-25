@@ -5,6 +5,13 @@ and checks it, then either installs OpenWrt or puts the original firmware back.
 
 ## Getting it
 
+Published here: <https://github.com/WiFiGUY512/openwrt-arista-images/tree/main/install>
+(script: <https://raw.githubusercontent.com/WiFiGUY512/openwrt-arista-images/main/install/arista-field.py>).
+
+If it has to run without a terminal (a script, a CI job), say what to do on the
+command line: `--install`, `--restore DIR`, `--backup-only`, `--yes`,
+`--yes-install`.  A prompt with no terminal to ask on is an error, not a wait.
+
 ```sh
 curl -O https://raw.githubusercontent.com/WiFiGUY512/openwrt-arista-images/main/install/arista-field.py
 python -m pip install paramiko
@@ -158,4 +165,5 @@ without writing anything.
 - No signal at the site? `--offline` uses the cached release and skips the
   GitHub API; without the flag the tool also falls back to the cache if GitHub
   cannot be reached. Copy `arista-openwrt-files\` to the laptop beforehand.
+
 

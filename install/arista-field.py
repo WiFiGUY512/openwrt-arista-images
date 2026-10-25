@@ -311,6 +311,15 @@ TOOLS = _find_tools()
 T0 = time.time()
 
 
+def ask(prompt, hint):
+    """A question needs a terminal.  With piped input `input()` blocks for ever
+    and the run looks alive but is doing nothing (2026-10-25)."""
+    if not sys.stdin.isatty():
+        die("this run needs an answer to\n    %s\nand there is no terminal to ask on. "
+            "Add %s, or run it from a terminal." % (prompt.strip(), hint))
+    return input(prompt)
+
+
 def say(msg=""):
     """Every line carries the clock, on screen and in the log."""
     line = "" if msg is None else str(msg)
@@ -1006,7 +1015,7 @@ def boot_installer(run, card, pc_ip, ap_ip, itb, kind):
     m.say("the AP ends up on its own firmware; running this again costs nothing.")
     if not run.yes:
         m.say("(sensord is stopped while this shell is held: answer now.)")
-        if input("Type 'env' to write it: ").strip().lower() != "env":
+        if ask("Type 'env' to write it: ", "--yes").strip().lower() != "env":
             m.die("not confirmed; nothing was written")
 
     if kind == "stock":
@@ -1093,7 +1102,7 @@ def do_install(run, card, ip, ubi, sums):
     if not run.yes_install and not run.yes:
         mac = m.ssh_must(con, "cat /sys/class/net/lan1/address", 30).strip().lower()
         tail = mac.replace(":", "")[-4:]
-        if input("  Type the last four characters of the MAC on the label (%s): " % mac).strip().lower() != tail:
+        if ask("  Type the last four characters of the MAC on the label (%s): " % mac, "--yes-install").strip().lower() != tail:
             m.die("no match; nothing was written")
     m.say("  Writing slot 0 (erasing 256 MiB and writing back; about a minute):")
     with Heartbeat("writing NAND slot 0", 12):
@@ -1176,7 +1185,7 @@ def do_restore(run, card, manifest, backup_dir):
     m.say("  This erases NAND slot 0 (%s) and writes the AP's own image back." % s0["dev"])
     m.say("  Slot 1 and every NOR partition except the environment stay as found.")
     if not run.yes:
-        if input("  Type 'restore' to write it: ").strip().lower() != "restore":
+        if ask("  Type 'restore' to write it: ", "--yes").strip().lower() != "restore":
             m.die("not confirmed; nothing was written")
 
     prefix = push_tools(con, ("flash_erase", "nandwrite"))
@@ -1418,7 +1427,7 @@ def wait_installer(a, prefix, timeout=420, mac=None):
     cand = a.installer_ip or a.installer_at
     if not cand and not a.yes:
         m.say("")
-        cand = input("The installer is booting. What address did it take "
+        cand = ask("The installer is booting. What address did it take "
                      "(blank = scan %s.0/24)? " % prefix).strip() or None
     if cand:
         m.say("")
@@ -1651,7 +1660,7 @@ def main():
             m.say("  [3] Nothing -- stop here (the firmware is already saved)")
         else:
             m.say("  [2] Nothing -- stop here")
-        choice = input("Which? ").strip()
+        choice = ask("Which? [1/2/3] ", "--install or --restore DIR").strip()
         if choice == "1":
             action = "install"
         elif choice == "2" and manifest:
