@@ -682,6 +682,14 @@ atexit.register(_cleanup_stock)
 
 # --- 2. verify ---------------------------------------------------------------
 
+NAND_ERASE = 0x20000          # 128 KiB PEBs; NOR partitions are 64 KiB
+
+
+def is_ubi_volume(part):
+    """The pseudo-MTD devices a running system creates for UBI volumes."""
+    return part["name"] in ("ubi_rootfs", "rootfs_data")
+
+
 def mtd_table(text):
     rows = []
     for line in text.splitlines():
@@ -719,11 +727,14 @@ def verify_stock(pty, card):
     s0 = find_part(card["mtd"], d["slot0"])
     s1 = find_part(card["mtd"], d["slot1"])
     env = find_part(card["mtd"], d["appsblenv"])
-    nor = []                                    # NOR is everything before slot 0
-    for r in card["mtd"]:
-        if r is s0 or r is s1:
-            break
-        nor.append(r)
+    # Which partitions are NOR is not a matter of position: the C-230 lists its
+    # NOR before the NAND slots, the C-260 lists them after.  Erase size tells
+    # them apart (64 KiB NOR, 128 KiB NAND), and the UBI volume pseudo-devices
+    # that a running system exposes are not partitions at all.
+    nor = [r for r in card["mtd"]
+           if r is not s0 and r is not s1
+           and not is_ubi_volume(r) and r["erase"] < NAND_ERASE]
+    nand = [r for r in card["mtd"] if r is s0 or r is s1]
     problems = []
     if not s0:
         problems.append("no slot 0 partition (%s)" % "/".join(d["slot0"]))
@@ -926,14 +937,12 @@ def download_firmware(pty, card, outdir, include_slot1=True, pc_ip=None, port=80
                 "when": time.strftime("%Y-%m-%d %H:%M:%SZ", time.gmtime()),
                 "partitions": []}
     total = 0
-    seen_last = False
     for r in card["mtd"]:
-        # Physical partitions only: NOR, slot 0, slot 1.  Anything after slot 1
-        # is a UBI volume pseudo-device, and the raw slot already contains it.
-        if seen_last:
+        # Every real partition, in either model's order.  A UBI volume that a
+        # running system exposes (ubi_rootfs, rootfs_data) is not a partition:
+        # its bytes are inside the raw slot already.
+        if is_ubi_volume(r):
             continue
-        if r is card["slot1"]:
-            seen_last = True
         if r is card["slot1"] and not include_slot1:
             m.say("  %-6s %-14s skipped (--fast)" % (r["dev"], r["name"]))
             continue
@@ -1604,7 +1613,7 @@ def main():
          "The AP must be powered, on the network, and on its factory firmware.\n"
          "If it already runs OpenWrt, use --installer-at <its address> instead.\n"
          "This uses Arista's own upgrade command, whose download path is evaled:\n"
-         "checked in the firmware of both models (C-230 and C-260, 8.9.0-).  On the\n"
+         "checked in both models' firmware (C-230 8.9.0-63.1, C-260 11.0.1-49).\n"
          "C-230 its /tmp/offline file blocks that command, so clear offline mode.\n"
          "If a unit's shell never offers 'Continue?', the console procedure in the\n"
          "repository README is the way in, and this tool is not.")

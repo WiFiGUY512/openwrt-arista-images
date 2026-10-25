@@ -164,6 +164,11 @@ What is per-model lives in `MODELS` and nowhere else:
 
 Notes that matter for the C-260:
 
+- **The partition tables differ in order.** The C-230 lists its NOR first and
+  its NAND slots last; the C-260 lists slot 0, slot 1, then the NOR. Nothing may
+  depend on position: the tool tells NOR from NAND by erase size (64 KiB against
+  128 KiB) and skips the UBI volume pseudo-devices a running system exposes.
+  Both models' real tables are checked by `c230\test-layout.py`.
 - **`pri`.** Arista normally runs a C-260 from slot 1 (`pri=1`), so slot 0 is
   genuinely spare and the install replaces the spare. With `pri=0` the running
   Arista is in slot 0: the installer warns, and the backup taken in step 3 is
@@ -173,12 +178,14 @@ Notes that matter for the C-260:
   so `/tmp` on the AP is enough.
 - **The way in works on the C-260 too.** Its factory shell is a readable script,
   and its own firmware has the same chain this tool uses -- checked on
-  2026-10-25 in the slot-1 image of a C-260 backup: `sensor-shell.sh:533`
+  2026-10-25 in the slot-1 image of a C-260 backup, firmware 11.0.1-49: `sensor-shell.sh:533`
   dispatches `upgrade`, its argument filter covers only the first three words of
   the typed line, `do_upgrade.sh:179` reads the server address/path unfiltered,
   `do_upgrade.sh:424` passes it to `prep_upgrade.sh` as argument 8, and
   `prep_upgrade.sh:373` evals it. That build's `do_upgrade.sh` has no
-  `/tmp/offline` guard, so that C-230 failure mode does not exist on it.
+  `/tmp/offline` guard, so that C-230 failure mode does not exist on it. Its
+  `version` command prints what this tool parses (`The device model is C-260.`,
+  `Device Build: [...]`), so the model is read, not asked for.
 - **Status.** Still to run on a real C-260. Everything the installer then does
   is the C-260's own tested script, but the round trip through this tool (env
   write, TFTP fetch, RAM installer, slot 0, first boot) has not been done on
