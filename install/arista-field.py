@@ -1645,7 +1645,7 @@ def wait_installer(a, prefix, timeout=420, mac=None):
     if not cand and not a.yes:
         m.say("")
         cand = ask("The installer is booting. What address did it take "
-                     "(blank = scan %s.0/24)? " % prefix).strip() or None
+                     "(blank = scan %s.0/24)? " % prefix, "--installer-ip").strip() or None
     if cand:
         m.say("")
         m.say("Waiting for the installer at %s (it may take ~1-2 min to boot)." % cand)
