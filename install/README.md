@@ -9,16 +9,17 @@ puts the original firmware back.
 Published here: <https://github.com/WiFiGUY512/openwrt-arista-images/tree/main/install>
 (script: <https://raw.githubusercontent.com/WiFiGUY512/openwrt-arista-images/main/install/arista-field.py>).
 
-\\sh
+```sh
 curl -O https://raw.githubusercontent.com/WiFiGUY512/openwrt-arista-images/main/install/arista-field.py
 python -m pip install paramiko
-\
-Needs Python 3 and \paramiko\. The images come from this repository's releases,
+```
+
+Needs Python 3 and `paramiko`. The images come from this repository's releases,
 so nothing else has to be downloaded by hand.
 
 If it has to run without a terminal (a script, a CI job), say what to do on the
-command line: \--install\, \--restore DIR\, \--backup-only\, \--yes\,
-\--yes-install\. A prompt with no terminal to ask on is an error, not a wait.
+command line: `--install`, `--restore DIR`, `--backup-only`, `--yes`,
+`--yes-install`. A prompt with no terminal to ask on is an error, not a wait.
 
 ---
 
@@ -159,7 +160,7 @@ What is per-model lives in `MODELS` and nowhere else:
 | FIT configuration | `config@ac02` | `config@hk01` |
 | slot 0 name | `rootfs` | `ubi` in 25.12's tree, `rootfs` in main's (both accepted) |
 | installer | `arista-c230-install` | `arista-c260-install` |
-| NOR total | 32 MiB, checked | not recorded yet, so reported and not judged |
+| NOR total | 32 MiB, checked | 32 MiB, checked (measured from a C-260's /proc/mtd) |
 
 Notes that matter for the C-260:
 
@@ -170,10 +171,17 @@ Notes that matter for the C-260:
 - **No USB stick needed.** The C-260's installer wants a stick when it takes its
   own backup; this tool passes `--no-backup` and keeps the backup here instead,
   so `/tmp` on the AP is enough.
-- **Status.** The C-260 path has not been through a unit yet. Two things are
-  unproven on that model: the factory-shell eval this tool logs in with (proven
-  on the C-230 only), and the NOR size it reports. Everything the installer then
-  does is the C-260's own, already tested script. The first run on a unit should
-  be `--backup-only` first, which writes nothing.
+- **The way in works on the C-260 too.** Its factory shell is a readable script,
+  and its own firmware has the same chain this tool uses -- checked on
+  2026-10-25 in the slot-1 image of a C-260 backup: `sensor-shell.sh:533`
+  dispatches `upgrade`, its argument filter covers only the first three words of
+  the typed line, `do_upgrade.sh:179` reads the server address/path unfiltered,
+  `do_upgrade.sh:424` passes it to `prep_upgrade.sh` as argument 8, and
+  `prep_upgrade.sh:373` evals it. That build's `do_upgrade.sh` has no
+  `/tmp/offline` guard, so that C-230 failure mode does not exist on it.
+- **Status.** Still to run on a real C-260. Everything the installer then does
+  is the C-260's own tested script, but the round trip through this tool (env
+  write, TFTP fetch, RAM installer, slot 0, first boot) has not been done on
+  that model. First run should be `--backup-only`, which writes nothing.
 - The fallback is the same shape as the C-230's: the netboot `bootcmd` restores
   Arista's own boot and resets if the TFTP fetch fails.
