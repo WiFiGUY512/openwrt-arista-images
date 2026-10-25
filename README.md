@@ -15,6 +15,7 @@ Each release has, for each model:
 | `...-squashfs-sysupgrade.bin` | updating an AP that already runs this port |
 | `SHA256SUMS` | the checksums of every file |
 
+- **In a hurry, no console cable:** [install/QUICKSTART.md](install/QUICKSTART.md).
 - **AP still on Arista's firmware:** [First install](#first-install-c-230).
 - **AP already on this port:** [Updating](#updating-an-ap-that-runs-this-port).
 
