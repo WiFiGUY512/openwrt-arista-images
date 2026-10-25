@@ -422,10 +422,10 @@ MODELS = {
         "appsblenv": ("0:APPSBLENV", "appsblenv"),
         "need_nor": ("0:HLOS_1",),
         "need_env": ("bootcmd", "ba0", "ba1", "ubootscript"),
-        # Not measured on a C-260 yet: its NOR has the same partition set as the
-        # C-230's minus DEVCERT, but nobody has recorded the sizes.  None means
-        # "report what you see, do not judge" until a unit has been through it.
-        "nor_total": None,
+        # Measured from a C-260's own /proc/mtd (backups/c260-30862db33c8f):
+        # the same partition set as the C-230's minus DEVCERT, and it adds up
+        # to exactly the same 32 MiB.
+        "nor_total": 32 * 1024 * 1024,
         "slot_size": 0x10000000,
         # Arista normally runs the C-260 from slot 1 (pri=1), so slot 0 is the
         # spare.  pri=0 means slot 0 holds the running Arista: the installer
@@ -1601,11 +1601,12 @@ def main():
     step("Connect to the AP",
          "Log in to %s and get a root shell without touching its flash or\n"
          "environment (Arista's config shell, then prep_upgrade.sh's eval)." % a.host,
-         "The AP must be powered, on the network, and on its factory firmware,\n"
-         "and in online mode (Arista's /tmp/offline blocks its upgrade command).\n"
+         "The AP must be powered, on the network, and on its factory firmware.\n"
          "If it already runs OpenWrt, use --installer-at <its address> instead.\n"
-         "The eval this uses has only been proven on the C-230: if a C-260's config\n"
-         "shell will not take its upgrade path, the console procedure in the\n"
+         "This uses Arista's own upgrade command, whose download path is evaled:\n"
+         "checked in the firmware of both models (C-230 and C-260, 8.9.0-).  On the\n"
+         "C-230 its /tmp/offline file blocks that command, so clear offline mode.\n"
+         "If a unit's shell never offers 'Continue?', the console procedure in the\n"
          "repository README is the way in, and this tool is not.")
     kind, shell, card = connect(a.host)
     run.shell = shell
