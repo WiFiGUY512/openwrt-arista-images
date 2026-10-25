@@ -1670,6 +1670,22 @@ def wait_installer(a, prefix, timeout=420, mac=None):
     field nobody knows our subnets and DHCP may hand out anything; a scan of the
     AP's own /24 is only the fallback."""
     cand = a.installer_ip or a.installer_at
+    if not cand:
+        # The installer's own hostname is "OpenWrt" (from its image), and a DHCP
+        # server that publishes lease names in DNS answers this in a second.
+        # The MAC check is what makes it safe: another OpenWrt box on the network
+        # answers to the same name.
+        for name in ("OpenWrt", "openwrt"):
+            try:
+                ip = socket.gethostbyname(name)
+            except Exception:
+                continue
+            r = check_installer(ip, timeout=4, mac=mac)
+            if r:
+                m.say("")
+                m.say("  the DHCP server publishes the installer as '%s' -> %s" % (name, ip))
+                return r[0], ip, r[1], r[2]
+            break
     if not cand and not a.yes:
         m.say("")
         cand = ask("The installer is booting. What address did it take "
