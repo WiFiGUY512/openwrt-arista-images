@@ -1266,11 +1266,39 @@ def do_install(run, card, ip, ubi, sums):
         if out.strip() != sha256_file(local):
             m.die("%s arrived wrong on the AP" % what)
         m.say("    on the AP and sha256-verified.")
+    # What the shipped installer accepts differs by image: the C-230 one has
+    # --no-backup, the C-260 one (11.0.1-era) does not, and that one also insists
+    # on >512 MiB free wherever its backup goes while this RAM installer's /tmp
+    # reports ~432 MiB.  So ask the script what it supports, and if it must take
+    # a backup, give it a tmpfs sized to its own check -- the backup is only
+    # ~65 MiB; 512 MiB is a conservative bound and tmpfs uses RAM per page
+    # written.
+    inst = MODELS[card["model"]]["installer"]
+    out, _ = m.ssh_exec(con, "grep -q -- '--no-backup' $(command -v %s) && echo yes || echo no"
+                        % inst, 30)
+    no_backup = "yes" in out
+    out, _ = m.ssh_exec(con, "df -k %s | tail -1 | awk '{print $4}'" % stage, 30)
+    try:
+        free_mb = int(out.strip().split()[0]) // 1024
+    except Exception:
+        free_mb = 0
+    m.say("  installer %s: --no-backup %s, %s has %d MiB free"
+          % (inst, "supported" if no_backup else "NOT supported", stage, free_mb))
+    if not no_backup and free_mb < 600:
+        big = "/mnt/" + card["model"] + "stage"
+        m.say("  it wants >512 MiB for its own backup: staging on a tmpfs")
+        m.ssh_must(con, "mkdir -p %s; mountpoint -q %s || mount -t tmpfs -o size=768M none %s"
+                   % (big, big, big), 60)
+        m.ssh_must(con, "cp %s/SHA256SUMS %s/factory.ubi %s/" % (stage, stage, big), 300)
+        stage = big
+        m.say("    staging on %s" % stage)
+    flags = "--dry-run --stick %s" if not no_backup else "--dry-run --no-backup --stick %s"
+    flags = flags % stage
+
     m.say("")
     m.say("  Running the installer's own checks (this writes nothing):")
-    with Heartbeat("installer dry run", 12):
-        out, _ = m.ssh_exec(con, "%s --dry-run --no-backup --stick %s 2>&1"
-                            % (MODELS[card["model"]]["installer"], stage), 900)
+    with Heartbeat("installer dry run", 20):
+        out, _ = m.ssh_exec(con, "%s %s 2>&1" % (inst, flags), 1800)
     for line in out.splitlines():
         m.say("    " + line)
     if "INSTALL-RESULT: OK" not in out:
@@ -1285,9 +1313,9 @@ def do_install(run, card, ip, ubi, sums):
         if ask("  Type the last four characters of the MAC on the label (%s): " % mac, "--yes-install").strip().lower() != tail:
             m.die("no match; nothing was written")
     m.say("  Writing slot 0 (erasing 256 MiB and writing back; about a minute):")
-    with Heartbeat("writing NAND slot 0", 12):
-        out, _ = m.ssh_exec(con, "%s --yes --no-backup --stick %s 2>&1"
-                            % (MODELS[card["model"]]["installer"], stage), 1800)
+    with Heartbeat("writing NAND slot 0", 20):
+        out, _ = m.ssh_exec(con, "%s %s 2>&1"
+                            % (inst, flags.replace("--dry-run", "--yes")), 2400)
     for line in out.splitlines():
         m.say("    " + line)
     if "INSTALL-RESULT: OK installed" not in out:
