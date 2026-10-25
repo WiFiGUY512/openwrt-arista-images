@@ -1,4 +1,4 @@
-# OpenWrt images for Arista access points
+﻿# OpenWrt images for Arista access points
 
 Built images of an OpenWrt port for the Arista C-230 (Qualcomm IPQ8071A)
 and C-260 (IPQ8074) access points, on OpenWrt main. Source is not in this
@@ -17,6 +17,22 @@ Each release has, for each model:
 
 - **AP still on Arista's firmware:** [First install](#first-install-c-230).
 - **AP already on this port:** [Updating](#updating-an-ap-that-runs-this-port).
+
+## No console cable: `arista-field.py`
+
+[`install/arista-field.py`](install/README.md) does the first install over the
+network, and can put the AP's own firmware back afterwards. It verifies the AP,
+downloads its whole flash and checks it against the AP's own hashes, then asks
+whether to install OpenWrt or restore what was there.
+
+```sh
+curl -O https://raw.githubusercontent.com/WiFiGUY512/openwrt-arista-images/main/install/arista-field.py
+python arista-field.py --host 192.168.1.191
+```
+
+It needs Python 3 with `paramiko`, TCP 8069 open on your PC, UDP 69 free, and a
+DHCP server on the AP's segment. The procedure below does the same thing by hand
+with a console cable, and is worth reading before you run either.
 
 ## Status
 
@@ -249,3 +265,4 @@ To check an image without flashing, replace `sysupgrade -v` with
 Built from OpenWrt main with the port's patches; the device support is
 going upstream as OpenWrt pull requests. The corresponding source for any
 image here is available on request: open an issue in this repository.
+

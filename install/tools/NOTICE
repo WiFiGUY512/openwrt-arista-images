@@ -1,0 +1,9 @@
+These two binaries are only used by the "put this AP's original firmware back"
+path in `arista-field.py`, when the RAM installer image has no mtd tools of its
+own.
+
+- `flash_erase`, `nandwrite`: from mtd-utils 2.3.1, licence GPL-2.0.
+- Built for aarch64 / musl with the OpenWrt toolchain (ipq807x, Cortex-A53).
+- Source: mtd-utils 2.3.1 from <https://git.infradead.org/mtd-utils.git>,
+  built unmodified by this project's OpenWrt build tree. The corresponding
+  source is available on request: open an issue in this repository.
