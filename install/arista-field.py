@@ -243,7 +243,9 @@ def fetch_release(tag, models, cache):
     want = ["SHA256SUMS"] + [f for m in models for f in files_for(m).values()]
     for name in want:
         if name not in assets:
-            die("the release has no %s" % name)
+            die("the release %s has no %s for this model.  Either publish that "
+                "model's files in a release, or copy them into %s and run with "
+                "--offline --tag %s." % (tag, name, cache, tag))
         path = os.path.join(d, name)
         if not os.path.exists(path):
             say("  downloading %s" % name)
@@ -437,6 +439,27 @@ MODELS = {
         "need_env": ("bootcmd", "ba0", "ba1", "ubootscript"),
         "nor_total": 32 * 1024 * 1024,
         "slot_size": 0x10000000,
+    },
+    "c360": {
+        "name": "C-360",
+        # OpenWrt main's FIT configuration for this board, and the load address
+        # its size needs: the C-360's image goes to 0xA0000000, not 0x60000000
+        # (from c360/INSTALL.md).
+        "fit_cfg": "config@hk09",
+        "load_addr": "0xA0000000",
+        "installer": "arista-c360-install",
+        "slot0": ("rootfs", "ubi"),
+        "slot1": ("rootfs_1",),
+        "appsblenv": ("0:APPSBLENV", "0:appsblenv"),
+        "need_nor": ("0:HLOS_1", "0:hlos_1"),
+        "need_env": ("bootcmd", "ba0", "ba1", "ubootscript"),
+        # Its NOR is 32 MiB with a 1 MiB ART (backups/nor_parts/MANIFEST.txt).
+        "nor_total": 32 * 1024 * 1024,
+        # NAND slot 0 is 0x18000000 on this model: 384 MiB, not 256 MiB.
+        "slot_size": 0x18000000,
+        # Its installer backs up 768 MiB of NAND plus NOR and wants >512 MiB free,
+        # so it gets a bigger staging tmpfs than the C-260.
+        "stage_mb": 1024,
     },
     "c260": {
         "name": "C-260",
@@ -1126,11 +1149,30 @@ def download_firmware(pty, card, outdir, include_slot1=True, pc_ip=None, port=80
 
 # --- 4. netboot the RAM installer -------------------------------------------
 
+def fit_config_for(path, preferred):
+    """The FIT configuration to boot, taken from the image itself.
+
+    A model's configuration name depends on which port built the image, not on
+    the model: the C-360 is config@1 in 25.12's tree and config@hk09 in main's,
+    and the C-260 is config@1 in 25.12 and config@hk01 in main.  Guessing wrong
+    makes U-Boot answer "config not found", so the image is asked."""
+    try:
+        head = open(path, "rb").read()   # the FDT can sit anywhere in the FIT
+    except Exception:
+        return preferred, []
+    names = sorted({m.decode() for m in re.findall(rb"config@[A-Za-z0-9]+", head)})
+    if preferred in names:
+        return preferred, names
+    if len(names) == 1:
+        return names[0], names
+    return preferred, names
+
+
 def ap_address(a_host, pc_ip):
     return a_host.rsplit(".", 1)[0] + ".230"
 
 
-def netboot_env(pc_ip, ap_ip, itb_name, cfg):
+def netboot_env(pc_ip, ap_ip, itb_name, cfg, load="0x60000000"):
     """The two variables the netboot needs, as (name, value) pairs.
 
     They are kept apart on purpose.  The injected shell on Arista's firmware
@@ -1149,9 +1191,10 @@ def netboot_env(pc_ip, ap_ip, itb_name, cfg):
     fetch = ("setenv ipaddr %s; setenv gatewayip %s; setenv serverip %s; "
              "setenv fdt_high 0x4A3E0000; "
              "setenv bootargs console=ttyMSM0,115200n8 rootwait panic=0; "
-             "sleep 5; tftpboot 0x60000000 %s && bootm 0x60000000#%s; "
-             "sleep 3; tftpboot 0x60000000 %s && bootm 0x60000000#%s"
-             % (ap_ip, ap_ip.rsplit(".", 1)[0] + ".1", pc_ip, itb_name, cfg, itb_name, cfg))
+             "sleep 5; tftpboot %s %s && bootm %s#%s; "
+             "sleep 3; tftpboot %s %s && bootm %s#%s"
+             % (ap_ip, ap_ip.rsplit(".", 1)[0] + ".1", pc_ip,
+                load, itb_name, load, cfg, load, itb_name, load, cfg))
     fallback = ('run owrt_nb; setenv mtdids; setenv mtdparts; setenv fdt_high 0x4A400000; '
                 'if test ${pri} = 0; then setenv bootargs ${ba0}; else setenv bootargs ${ba1}; fi; '
                 'setenv bootcmd "run ubootscript"; saveenv; reset')
@@ -1181,7 +1224,14 @@ def boot_installer(run, card, pc_ip, ap_ip, itb, kind):
     global _REBOOTED
     itb_name = os.path.basename(itb)
     short = "%s.itb" % card["model"]      # short on purpose: it is pasted into a line
-    writes = netboot_env(pc_ip, ap_ip, short, MODELS[card["model"]]["fit_cfg"])
+    mdl = MODELS[card["model"]]
+    cfg, seen = fit_config_for(itb, mdl["fit_cfg"])
+    if cfg != mdl["fit_cfg"]:
+        m.say("  this image boots %s (the %s default is %s); using what the image has"
+              % (cfg, mdl["name"], mdl["fit_cfg"]))
+    if not seen:
+        m.say("  (could not read a configuration name out of the image; using %s)" % cfg)
+    writes = netboot_env(pc_ip, ap_ip, short, cfg, mdl.get("load_addr", "0x60000000"))
     run.tftp = Tftp({short: itb, itb_name: itb})     # serve before the AP asks
     m.say("TFTP serving %s as %s on UDP 69." % (itb_name, short))
     m.say("")
@@ -1286,9 +1336,10 @@ def do_install(run, card, ip, ubi, sums):
           % (inst, "supported" if no_backup else "NOT supported", stage, free_mb))
     if not no_backup and free_mb < 600:
         big = "/mnt/" + card["model"] + "stage"
+        size = "%dM" % MODELS[card["model"]].get("stage_mb", 768)
         m.say("  it wants >512 MiB for its own backup: staging on a tmpfs")
-        m.ssh_must(con, "mkdir -p %s; mountpoint -q %s || mount -t tmpfs -o size=768M none %s"
-                   % (big, big, big), 60)
+        m.ssh_must(con, "mkdir -p %s; mountpoint -q %s || mount -t tmpfs -o size=%s none %s"
+                   % (big, big, size, big), 60)
         m.ssh_must(con, "cp %s/SHA256SUMS %s/factory.ubi %s/" % (stage, stage, big), 300)
         stage = big
         m.say("    staging on %s" % stage)
@@ -1646,6 +1697,13 @@ def release_files(a, model):
         except Exception as e:
             m.say("  cannot reach GitHub (%s)" % e)
             m.say("  looking for the release already saved on this PC.")
+    names = m.files_for(model)
+    want = ["SHA256SUMS"] + list(names.values())
+    if all(os.path.exists(os.path.join(cache, n)) for n in want):
+        m.check_sums(cache, want)
+        m.say("  using the images in %s, SHA256SUMS verified" % cache)
+        return (os.path.join(cache, names["itb"]), os.path.join(cache, names["ubi"]),
+                os.path.join(cache, names["sums"]), "local")
     tag = a.tag
     if not tag:
         cands = [x for x in os.listdir(cache)
