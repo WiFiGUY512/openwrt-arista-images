@@ -1485,6 +1485,25 @@ def card_slot_names(d):
 
 # --- finding the AP again ----------------------------------------------------
 
+def _first_answer(live, prefix, probe, workers=32):
+    """Ask every live host at once and take the first real answer.
+
+    Sequential identification was the actual cost of a scan: 35 s for 19 hosts,
+    against 2.4 s in parallel (measured 2026-10-25)."""
+    if not live:
+        return None
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(workers, len(live))) as ex:
+        futs = {ex.submit(probe, "%s.%d" % (prefix, i)): i for i in live}
+        for f in concurrent.futures.as_completed(futs):
+            try:
+                r = f.result()
+            except Exception:
+                continue
+            if r:
+                return r
+    return None
+
+
 def find_stock(prefix, timeout):
     """The AP back on its own firmware: Arista's config shell answers."""
     m.say("")
@@ -1500,19 +1519,21 @@ def find_stock(prefix, timeout):
                     live.append(f.result())
                 except Exception:
                     pass
-        for i in sorted(live):
-            ip = "%s.%d" % (prefix, i)
+        def probe_stock(ip):
             try:
-                client = m.ssh_open(ip, "config", "config", timeout=5)
+                client = m.ssh_open(ip, "config", "config", timeout=4)
             except Exception:
-                continue
+                return None
             pty = m.Pty(client.invoke_shell(width=120, height=40))
-            if not pty.wait(r"\[config\]\$", 15):
-                continue
+            if not pty.wait(r"\[config\]\$", 10):
+                return None
             pty.send("version")
-            time.sleep(2)
-            text = pty.since(0)
-            return ip, text
+            time.sleep(1.5)
+            return ip, pty.since(0)
+
+        got = _first_answer(live, prefix, probe_stock)
+        if got:
+            return got
         time.sleep(5)
     return None, None
 
@@ -1553,18 +1574,22 @@ def find_ap(prefix, timeout, want_ram=None, skip=(), mac=None):
                     pass
         m.say("  [+%ds] %d host(s) with SSH; asking each what it is."
               % (int(time.time() - start), len(live)))
-        for i in sorted(live):
-            ip = "%s.%d" % (prefix, i)
-            r = check_installer(ip, timeout=5, mac=mac)
+        def probe_ap(ip):
+            r = check_installer(ip, timeout=4, mac=mac)
             if not r:
-                continue
+                return None
             con, board, root, got_mac = r
             ram = root in ("tmpfs", "rootfs", "ramfs")
             m.say("  %s: %s, root on %s, MAC %s%s"
                   % (ip, board, root, got_mac or "?", " (RAM)" if ram else ""))
-            if want_ram is None or ram == want_ram:
-                return con, ip, board, root
-            con.close()
+            if want_ram is not None and ram != want_ram:
+                con.close()
+                return None
+            return con, ip, board, root
+
+        got = _first_answer(live, prefix, probe_ap)
+        if got:
+            return got
         time.sleep(5)
     return None, None, None, None
 
