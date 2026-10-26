@@ -1517,6 +1517,24 @@ def find_stock(prefix, timeout):
     return None, None
 
 def find_ap(prefix, timeout, want_ram=None, skip=(), mac=None):
+    # Fast path: the AP's own DHCP name, if the server publishes leases in DNS
+    # and the MAC matches.  Checked before any scan because leases move: after
+    # an install the name can still answer with the old address, which the MAC
+    # check rejects.
+    if mac:
+        for name in ("OpenWrt", "openwrt"):
+            try:
+                ip = socket.gethostbyname(name)
+            except Exception:
+                continue
+            r = check_installer(ip, timeout=5, mac=mac)
+            if r:
+                ram = r[2] in ("tmpfs", "rootfs", "ramfs")
+                if want_ram is None or ram == want_ram:
+                    m.say("")
+                    m.say("  '%s' in DNS -> %s, and the MAC matches" % (name, ip))
+                    return r[0], ip, r[1], r[2]
+            break
     m.say("")
     m.say("Scanning %s.0/24 for %s (a few seconds per round)."
           % (prefix, ("the AP with MAC %s" % mac) if mac else "the AP"))
