@@ -1538,24 +1538,31 @@ def find_stock(prefix, timeout):
     return None, None
 
 def find_ap(prefix, timeout, want_ram=None, skip=(), mac=None):
-    # Fast path: the AP's own DHCP name, if the server publishes leases in DNS
-    # and the MAC matches.  Checked before any scan because leases move: after
-    # an install the name can still answer with the old address, which the MAC
-    # check rejects.
-    if mac:
+    def by_dns():
+        """The AP's own DHCP name, if the server publishes leases in DNS and the
+        MAC matches.  Tried before every scan round: after a reboot the lease is
+        new, so a single attempt at the start arrives too early (seen on the
+        C-260 revert, 2026-10-25)."""
+        if not mac:
+            return None
         for name in ("OpenWrt", "openwrt"):
             try:
                 ip = socket.gethostbyname(name)
             except Exception:
                 continue
-            r = check_installer(ip, timeout=5, mac=mac)
+            r = check_installer(ip, timeout=4, mac=mac)
             if r:
                 ram = r[2] in ("tmpfs", "rootfs", "ramfs")
                 if want_ram is None or ram == want_ram:
                     m.say("")
-                    m.say("  '%s' in DNS -> %s, and the MAC matches" % (name, ip))
+                    m.say("  DNS: %r -> %s, and the MAC matches" % (name, ip))
                     return r[0], ip, r[1], r[2]
             break
+        return None
+
+    got = by_dns()
+    if got:
+        return got
     m.say("")
     m.say("Scanning %s.0/24 for %s (a few seconds per round)."
           % (prefix, ("the AP with MAC %s" % mac) if mac else "the AP"))
@@ -1563,6 +1570,9 @@ def find_ap(prefix, timeout, want_ram=None, skip=(), mac=None):
     start = time.time()
     window = 0
     while time.time() < end:
+        got = by_dns()
+        if got:
+            return got
         with concurrent.futures.ThreadPoolExecutor(max_workers=128) as ex:
             futs = [ex.submit(lambda i=i: (socket.create_connection(("%s.%d" % (prefix, i), 22), 0.4).close(), i)[1],)
                     for i in range(1, 255) if "%s.%d" % (prefix, i) not in skip]
