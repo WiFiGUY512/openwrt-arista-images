@@ -57,6 +57,10 @@ Pick `1`. It writes two U-Boot variables, reboots the AP into a temporary
 installer over TFTP, sends the image over SSH, and the installer writes slot 0
 after its own checks pass. Arista's system in slot 1 is kept as the fallback.
 
+When it finishes, the AP restarts on its own: look for it on your DHCP server's
+lease list (hostname `OpenWrt`, and the MAC is on the label). Add `--verify` if
+you would rather the tool wait for it and check.
+
 ## If something goes wrong
 
 - **"cannot log in ... (tried root, config)"** — Arista's account is `config`;

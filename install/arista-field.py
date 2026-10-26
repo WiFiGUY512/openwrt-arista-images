@@ -1775,6 +1775,9 @@ def main():
     ap.add_argument("--installer-at", metavar="IP",
                     help="the RAM installer is already running at this address "
                          "(resume after an interruption)")
+    ap.add_argument("--verify", action="store_true",
+                    help="afterwards, wait for the AP and check it (default: leave it "
+                         "to the operator and the DHCP lease list)")
     ap.add_argument("--installer-ip", metavar="IP",
                     help="the address the installer took from DHCP, for the netboot "
                          "that follows (blank: scan the AP's /24)")
@@ -2012,18 +2015,30 @@ def main():
         do_restore(run, card, manifest, backup_dir)
 
     # ---- report ------------------------------------------------------------
-    if action == "install":
-        verify_openwrt(a.host.rsplit(".", 1)[0], card.get("mac"))
-    else:
-        ip2, text = find_stock(a.host.rsplit(".", 1)[0], 420)
-        m.say("")
-        if ip2 is None:
-            m.say("Arista's firmware is not answering yet; power-cycle and look at the console.")
+    if a.verify:
+        if action == "install":
+            verify_openwrt(a.host.rsplit(".", 1)[0], card.get("mac"))
         else:
-            m.say("This AP is back on its own firmware at %s." % ip2)
-            for line in text.splitlines():
-                if "Device Build" in line or "Device Version" in line:
-                    m.say("  " + line.strip())
+            ip2, text = find_stock(a.host.rsplit(".", 1)[0], 420)
+            m.say("")
+            if ip2 is None:
+                m.say("Arista's firmware is not answering yet; power-cycle and look "
+                      "at the console.")
+            else:
+                m.say("This AP is back on its own firmware at %s." % ip2)
+                for line in text.splitlines():
+                    if "Device Build" in line or "Device Version" in line:
+                        m.say("  " + line.strip())
+    else:
+        m.say("")
+        m.say("Done. The AP is restarting; find it on your DHCP server's lease list.")
+        if action == "install":
+            m.say("  it will appear as hostname OpenWrt, MAC %s" % (card.get("mac") or "?"))
+            m.say("  booting from NAND, pri=1; Arista's slot 1 is still there as the fallback")
+            m.say("  Wi-Fi is off and there is no root password until you set one")
+        else:
+            m.say("  it will appear on Arista's firmware, at its usual address")
+        m.say("  (add --verify to have this tool wait for it and check instead)")
 
     m.say("")
     m.say("The AP's firmware as found: %s" % backup_dir)
