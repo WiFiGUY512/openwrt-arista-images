@@ -22,6 +22,8 @@ byte of it, and only then offers to change anything.
     python arista-field.py --host 192.168.1.191 --install
     python arista-field.py --host 192.168.1.191 --backup-only
     python arista-field.py --restore backups/c230-30862d73b66f   # from OpenWrt or Arista
+    python arista-field.py --list-releases                   # what each release carries
+    python arista-field.py --fetch w318                      # a model's images, verified
 """
 
 import argparse
@@ -222,12 +224,36 @@ def ssh_must(con, cmd, timeout=120, what=None):
 
 
 def files_for(model):
-    d = "c-" + model[1:]
-    return {
-        "itb": "openwrt-qualcommax-ipq807x-arista_%s-initramfs-uImage.itb" % d,
-        "ubi": "openwrt-qualcommax-ipq807x-arista_%s-squashfs-factory.ubi" % d,
-        "sums": "%s-install-SHA256SUMS" % model,
-    }
+    """The release files this model needs, by kind.  The C-models install from
+    factory.ubi and its install sums; the W-models' images are the RAM installer
+    and the sysupgrade image.  An unknown model is named the C-models' way, so
+    asking for one finds no release rather than failing."""
+    d = MODELS.get(model) or {"target": "qualcommax/ipq807x", "device": "arista_c-" + model[1:]}
+    base = "openwrt-%s-%s" % (d["target"].replace("/", "-"), d["device"])
+    names = {"itb": "%s-%s" % (base, d.get("initramfs", "initramfs-uImage.itb"))}
+    if d.get("image", "factory") == "factory":
+        names["ubi"] = base + "-squashfs-factory.ubi"
+        names["sums"] = "%s-install-SHA256SUMS" % model
+    else:
+        names["sysupgrade"] = base + "-squashfs-sysupgrade.bin"
+    return names
+
+
+def field_install(model):
+    """Whether this tool installs and restores this model itself.  The W-318
+    and W-118 are in the releases (--list-releases, --fetch) but are installed
+    by hand for now."""
+    return MODELS[model].get("field_install", True)
+
+
+def refuse_unsupported(model):
+    """Stop before anything is written, and say how this model is installed."""
+    d = MODELS[model]
+    die("this tool does not install or restore an Arista %s yet.  Its factory "
+        "firmware's way in and its install differ from the C-models' and have not "
+        "been run through this tool on a unit.  Nothing was written.\n"
+        "  Its images:      python arista-field.py --fetch %s\n"
+        "  Install by hand: %s" % (d["name"], model, d["manual"]))
 
 
 def http_get(url, accept=None):
@@ -356,6 +382,23 @@ def list_cmd():
             r["tag_name"], (r.get("published_at") or "")[:10], ", ".join(have) or "(none of these models)",
             "  [testing]" if r.get("prerelease") else "",
             "" if release_index(r) is not None else "  (no index; by file name)"))
+
+
+def fetch_cmd(a):
+    """--fetch MODEL: a model's newest release files, verified, with no AP: for
+    an install by hand, or to fill a field laptop's cache before the site."""
+    model = a.fetch.lower().replace("-", "")
+    if model not in MODELS:
+        die("no model %r; this tool knows %s" % (a.fetch, ", ".join(sorted(MODELS))))
+    d, tag = fetch_release(a.tag, [model], os.path.abspath(a.files), a.channel)
+    say("")
+    say("%s, release %s, verified, in %s:" % (MODELS[model]["name"], tag, d))
+    for kind, name in files_for(model).items():
+        say("  %-10s %s" % (kind, name))
+    if not field_install(model):
+        say("")
+        say("This tool does not install the %s yet.  By hand: %s"
+            % (MODELS[model]["name"], MODELS[model]["manual"]))
 
 
 def check_sums(d, names):
@@ -528,6 +571,8 @@ NETMASK = "255.255.255.0"
 MODELS = {
     "c230": {
         "name": "C-230",
+        "target": "qualcommax/ipq807x",
+        "device": "arista_c-230",
         "fit_cfg": "config@ac02",
         "installer": "arista-c230-install",
         "slot0": ("rootfs", "ubi"),
@@ -540,6 +585,8 @@ MODELS = {
     },
     "c360": {
         "name": "C-360",
+        "target": "qualcommax/ipq807x",
+        "device": "arista_c-360",
         # OpenWrt main's FIT configuration for this board, and the load address
         # its size needs: the C-360's image goes to 0xA0000000, not 0x60000000
         # (from c360/INSTALL.md).
@@ -561,6 +608,8 @@ MODELS = {
     },
     "c260": {
         "name": "C-260",
+        "target": "qualcommax/ipq807x",
+        "device": "arista_c-260",
         # OpenWrt main's FIT for this board has one configuration, config@hk01;
         # the 25.12 port used config@1.  The images in the release are main.
         "fit_cfg": "config@hk01",
@@ -581,6 +630,35 @@ MODELS = {
         # spare.  pri=0 means slot 0 holds the running Arista: the installer
         # warns, and the backup taken first is what makes that recoverable.
         "pri_note": "Arista usually runs a C-260 from slot 1 (pri=1).",
+    },
+    "w318": {
+        "name": "W-318",
+        "target": "qualcommax/ipq60xx",
+        "device": "arista_w-318",
+        # eMMC, with its kernel in NOR 0:HLOS: no factory.ubi.  The RAM
+        # installer's arista-w318-install writes the sysupgrade image itself.
+        "image": "sysupgrade",
+        # Listed and fetched; not yet installed or restored by this tool.
+        "field_install": False,
+        "manual": "RAM-boot its initramfs over TFTP from the console "
+                  "(bootm ...#config@cp01-c3), then on it run "
+                  "arista-w318-install --dry-run <sysupgrade.bin>, then again "
+                  "without --dry-run",
+    },
+    "w118": {
+        "name": "W-118",
+        "target": "ipq40xx/generic",
+        "device": "arista_w-118",
+        # Its U-Boot (2012.07) has no LZMA, so the RAM installer is a zImage FIT.
+        "initramfs": "initramfs-zImage.itb",
+        # Installed with sysupgrade -n from the RAM installer; the release also
+        # carries a factory.ubi, which that install does not use.
+        "image": "sysupgrade",
+        "field_install": False,
+        "manual": "RAM-boot its initramfs over TFTP from the console "
+                  "(bootm 0x84000000), back up the flash, set the boot command "
+                  "once at the U-Boot prompt, then sysupgrade -n its sysupgrade "
+                  "image",
     },
 }
 
@@ -848,6 +926,9 @@ def _connect_once(host, user=None, password=None):
             model = key
     if not model:
         m.die("the AP does not say which model it is:\n%s" % text.strip()[-500:])
+    if not field_install(model):
+        # Before 'upgrade': whether it gives a W-model a root shell is unchecked.
+        refuse_unsupported(model)
     fw = None
     for pat in (r"Device Build:\s*\[([^\]]+)\]", r"Device Version:\s*\[([^\]]+)\]"):
         mm = re.search(pat, text)
@@ -1273,30 +1354,38 @@ def ap_address(a_host, pc_ip):
 def netboot_env(pc_ip, ap_ip, itb_name, cfg, load="0x60000000"):
     """The two variables the netboot needs, as (name, value) pairs.
 
-    They are kept apart on purpose.  The injected shell on Arista's firmware
-    lives about a minute (prep_upgrade gives up and reboots), and a single
-    several-hundred-character fw_setenv is both slow to paste and easy to get
-    wrong, so each write stays short:
+    They are kept apart because the injected shell only lives about a minute and
+    a single several-hundred-character fw_setenv is slow to paste and easy to
+    get wrong.
 
-      owrt_nb  -- the RAM-image fetch, with two attempts: from a bootcmd U-Boot
-                  runs ~2 s after power-on and the AQR114C still reports the
-                  link Down, which is why the first try can fail.
-      bootcmd  -- run it; if the image never arrives, put Arista's own boot back
-                  (its bootargs too) and reset.  A failed tftpboot leaves
-                  U-Boot's load address set, and Arista's ubootscript would then
-                  call its own kernel bad, flip slots and loop (seen on the
-                  bench unit, 2026-10-25)."""
+    The order inside owrt_nb is the important part: **put Arista's own boot back
+    and save it BEFORE the fetch**, not after it.  A run that stops here, or a
+    fetch that is slow, or U-Boot sitting in its network retry, all used to leave
+    the AP depending on this PC: every reboot re-entered the netboot, and a power
+    cycle did the same, because bootcmd still pointed at it (a C-260 spent a
+    night in exactly that state, 2026-10-26).  Now the first thing the netboot
+    does is make the NEXT boot Arista's own, so any reset or power cycle recovers
+    by itself.  It costs one environment write per attempt, counted like any
+    other, and it happens before any RAM-only variable is touched, so the saved
+    environment is Arista's own apart from bootcmd.
+
+    Two fetch attempts: from a bootcmd U-Boot runs ~2 s after power-on and the
+    AQR114C can still report the link Down."""
+    clear = 'setenv bootcmd "run ubootscript"; saveenv'
     fetch = ("setenv ipaddr %s; setenv gatewayip %s; setenv serverip %s; "
              "setenv fdt_high 0x4A3E0000; "
              "setenv bootargs console=ttyMSM0,115200n8 rootwait panic=0; "
              "sleep 5; tftpboot %s %s && bootm %s#%s; "
-             "sleep 3; tftpboot %s %s && bootm %s#%s"
+             "sleep 3; tftpboot %s %s && bootm %s#%s; "
+             "reset"
              % (ap_ip, ap_ip.rsplit(".", 1)[0] + ".1", pc_ip,
                 load, itb_name, load, cfg, load, itb_name, load, cfg))
-    fallback = ('run owrt_nb; setenv mtdids; setenv mtdparts; setenv fdt_high 0x4A400000; '
-                'if test ${pri} = 0; then setenv bootargs ${ba0}; else setenv bootargs ${ba1}; fi; '
-                'setenv bootcmd "run ubootscript"; saveenv; reset')
-    return [("owrt_nb", fetch), ("bootcmd", fallback)]
+    # Three short values rather than one long one: a several-hundred-character
+    # fw_setenv gets truncated by the AP's tty (2026-10-25), so each write stays
+    # well under that.
+    return [("owrt_clear", clear),
+            ("owrt_nb", fetch),
+            ("bootcmd", "run owrt_clear; run owrt_nb")]
 
 
 def reboot_and_confirm(pty, host, wait=45):
@@ -1801,6 +1890,8 @@ def release_files(a, model):
 
     A field laptop often has no uplink at the site, so a cached release is used
     when it is there and verifies, and `--offline` skips the API entirely."""
+    if not field_install(model):
+        refuse_unsupported(model)
     cache = os.path.abspath(a.files)
     if not a.offline:
         try:
@@ -1979,6 +2070,9 @@ def main():
                     help="testing also takes pre-release builds (default: %(default)s)")
     ap.add_argument("--list-releases", action="store_true",
                     help="show which models each release carries, and stop")
+    ap.add_argument("--fetch", metavar="MODEL",
+                    help="download and verify a model's newest release files "
+                         "(c230, c260, c360, w318, w118) with no AP, and stop")
     ap.add_argument("--files", default=RELEASES, help="release cache (default: %(default)s)")
     ap.add_argument("--backup-dir", help="where to save the firmware (default backups/<model>-<mac>)")
     ap.add_argument("--backup-only", action="store_true", help="download the firmware and stop")
@@ -2005,6 +2099,9 @@ def main():
 
     if a.list_releases:
         list_cmd()
+        return
+    if a.fetch:
+        fetch_cmd(a)
         return
     if not a.host and not a.restore and not a.installer_at:
         m.die("give --host (an AP on its factory firmware), --restore DIR, or --installer-at IP")
@@ -2042,6 +2139,8 @@ def main():
         model = board.split(",")[-1].replace("-", "")
         if model not in MODELS:
             m.die("no entry for board %r" % board)
+        if not field_install(model):
+            refuse_unsupported(model)
         card = {"model": model, "board": board, "host": a.installer_at,
                 "mac": board_mac(con)}   # so the verifier knows which unit to expect
         run.installer = con
@@ -2073,6 +2172,8 @@ def main():
          "If a unit's shell never offers 'Continue?', the console procedure in the\n"
          "repository README is the way in, and this tool is not.")
     kind, shell, card = connect(a.host, a.user, a.password)
+    if not field_install(card["model"]):
+        refuse_unsupported(card["model"])
     run.shell = shell
     card["host"] = a.host
     m.say("  connected: %s" % ("factory firmware" if kind == "stock" else "OpenWrt"))
