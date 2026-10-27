@@ -30,6 +30,12 @@ list. Then check it answers:
 ping <AP address>
 ```
 
+If you are unsure which build the tool will take, ask it first — it needs no AP:
+
+```sh
+python arista-field.py --list-releases
+```
+
 ## 3. Save the AP's firmware first (writes nothing)
 
 ```sh

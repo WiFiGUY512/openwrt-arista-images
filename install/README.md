@@ -57,6 +57,10 @@ python arista-field.py --installer-at 192.168.1.17 --yes --yes-install
 # Wait for the AP afterwards and check it, instead of leaving that to you
 python arista-field.py --host 192.168.1.191 --install --verify
 
+# What each release carries, and which one this tool would take (no AP needed)
+python arista-field.py --list-releases
+python arista-field.py --host 192.168.1.191 --channel testing   # include pre-releases
+
 # Check an AP without touching it
 python arista-field.py --host 192.168.1.191 --verify-only
 
@@ -138,9 +142,14 @@ without writing anything.
 ## Where the images come from
 
 - **This PC** fetches the release from GitHub:
-  `WiFiGUY512/openwrt-arista-images` (public -- verified 2026-10-25 with no
-  credentials: API 200, nine assets, ~135 MiB, and the asset URLs download
-  anonymously). Latest at the time of writing: `v2026.10.17.1-41-gb4ecbba`.
+  `WiFiGUY512/openwrt-arista-images` (public; the assets download anonymously).
+  Releases come out one per build and not every one carries every model, so
+  **without `--tag` the tool takes the newest release that actually has this
+  AP's model**, newest first by publication date. `--list-releases` shows what
+  each one has; `--tag T` pins one (and stops if it lacks the model);
+  `--channel testing` also accepts pre-release builds. Where a release carries
+  an `index.json`, the tool checks the files against it as well as against
+  `SHA256SUMS`.
 - **The AP never talks to GitHub, or to the internet at all.** U-Boot pulls the
   initramfs from this PC over TFTP, and `factory.ubi` goes to the RAM installer
   over SSH from this PC. A field AP can be on an isolated segment with no

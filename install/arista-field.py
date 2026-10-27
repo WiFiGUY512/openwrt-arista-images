@@ -45,6 +45,11 @@ import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = "WiFiGUY512/openwrt-arista-images"
+# The GitHub API.  ARISTA_FIELD_API points it elsewhere (the tests' local mock).
+API = os.environ.get("ARISTA_FIELD_API", "https://api.github.com").rstrip("/")
+# A release's index.json lists the models it carries and their files (schema 1,
+# written by publish-release.py).  Releases older than it are matched by file name.
+INDEX = "index.json"
 
 # ---------------------------------------------------------------------------
 # Helpers carried in this file on purpose: a field installer has to be ONE
@@ -232,15 +237,90 @@ def http_get(url, accept=None):
     return urllib.request.urlopen(req, timeout=60)
 
 
-def fetch_release(tag, models, cache):
-    api = "https://api.github.com/repos/%s/releases/%s" % (REPO, "tags/" + tag if tag else "latest")
-    rel = json.load(http_get(api, "application/vnd.github+json"))
+_INDEXES = {}
+
+
+def list_releases(channel="stable"):
+    """The repository's releases, newest first.  Drafts never; pre-releases
+    (testing builds) only on the testing channel."""
+    rels, page = [], 1
+    while page <= 10:
+        batch = json.load(http_get("%s/repos/%s/releases?per_page=100&page=%d" % (API, REPO, page),
+                                   "application/vnd.github+json"))
+        rels += batch
+        if len(batch) < 100:
+            break
+        page += 1
+    rels = [r for r in rels if not r.get("draft") and (channel == "testing" or not r.get("prerelease"))]
+    rels.sort(key=lambda r: r.get("published_at") or r.get("created_at") or "", reverse=True)
+    return rels
+
+
+def release_index(rel):
+    """A release's index.json, or None for one published before there was one."""
+    tag = rel["tag_name"]
+    if tag not in _INDEXES:
+        _INDEXES[tag] = None
+        for a in rel.get("assets", []):
+            if a["name"] == INDEX:
+                try:
+                    _INDEXES[tag] = json.load(http_get(a["browser_download_url"]))
+                except Exception as e:
+                    say("  %s: its %s is unreadable (%s); going by file names" % (tag, INDEX, e))
+    return _INDEXES[tag]
+
+
+def release_carries(rel, models):
+    """Whether a release has every file these models need: its index.json must
+    list the model with those files, when it has an index, and the files must
+    be published either way."""
+    assets = {a["name"] for a in rel.get("assets", [])}
+    idx = release_index(rel)
+    for model in models:
+        need = set(files_for(model).values())
+        if idx is not None:
+            entry = idx.get("models", {}).get(model)
+            if not entry or not need <= {f["name"] for f in entry.get("files", {}).values()}:
+                return False
+        if not (need | {"SHA256SUMS"}) <= assets:
+            return False
+    return True
+
+
+def fetch_release(tag, models, cache, channel="stable"):
+    """The release for these models, downloaded into cache/<tag> and verified.
+
+    With a tag, that release, which must carry the models.  Without one, the
+    newest release on the channel that carries them: releases come out one
+    after another, and not every release has every model."""
+    names = "/".join(MODELS[x]["name"] if x in MODELS else x for x in models)
+    if tag:
+        rel = json.load(http_get("%s/repos/%s/releases/tags/%s" % (API, REPO, tag),
+                                 "application/vnd.github+json"))
+        if not release_carries(rel, models):
+            die("the release %s has no %s files.  Leave out --tag to take the newest "
+                "release that has them, or see what each release has with "
+                "--list-releases." % (tag, names))
+    else:
+        rel = next((r for r in list_releases(channel) if release_carries(r, models)), None)
+        if rel is None:
+            die("no %srelease has the %s files yet.  Publish that model's files in a "
+                "release%s, or copy them into %s and run with --offline --tag <tag>."
+                % ("" if channel == "testing" else "stable ", names,
+                   "" if channel == "testing" else " (or try --channel testing)", cache))
     tag = rel["tag_name"]
     assets = {a["name"]: a["browser_download_url"] for a in rel["assets"]}
     d = os.path.join(cache, tag)
     os.makedirs(d, exist_ok=True)
-    say("Release %s" % tag)
-    want = ["SHA256SUMS"] + [f for m in models for f in files_for(m).values()]
+    say("Release %s%s" % (tag, "  (testing build)" if rel.get("prerelease") else ""))
+    with open(os.path.join(d, "release.json"), "w") as f:
+        json.dump({"tag": tag, "name": rel.get("name"), "prerelease": bool(rel.get("prerelease")),
+                   "published_at": rel.get("published_at")}, f)
+    idx = release_index(rel)
+    if idx is not None:
+        with open(os.path.join(d, INDEX), "w") as f:
+            json.dump(idx, f)
+    want = ["SHA256SUMS"] + [f for x in models for f in files_for(x).values()]
     for name in want:
         if name not in assets:
             die("the release %s has no %s for this model.  Either publish that "
@@ -257,7 +337,25 @@ def fetch_release(tag, models, cache):
                     f.write(b)
             os.replace(path + ".part", path)
     check_sums(d, want)
+    if idx is not None:
+        for x in models:
+            listed = {f["name"]: f["sha256"] for f in idx["models"][x]["files"].values()}
+            for name in files_for(x).values():
+                if listed.get(name) != sha256_file(os.path.join(d, name)):
+                    die("%s does not match the release's %s; delete %s and run again" % (name, INDEX, d))
+        say("  and against the release's %s" % INDEX)
     return d, tag
+
+
+def list_cmd():
+    """What each release carries, newest first, testing builds marked."""
+    say("Releases of %s, newest first:" % REPO)
+    for r in list_releases("testing"):
+        have = [MODELS[x]["name"] for x in sorted(MODELS) if release_carries(r, [x])]
+        say("  %-32s %s  %-28s%s%s" % (
+            r["tag_name"], (r.get("published_at") or "")[:10], ", ".join(have) or "(none of these models)",
+            "  [testing]" if r.get("prerelease") else "",
+            "" if release_index(r) is not None else "  (no index; by file name)"))
 
 
 def check_sums(d, names):
@@ -1075,7 +1173,7 @@ def stream(target, cmd, path, timeout=3600):
     return n, h.hexdigest(), rc
 
 
-def download_firmware(pty, card, outdir, include_slot1=True, pc_ip=None, port=8069):
+def download_firmware(run, pty, card, outdir, include_slot1=True, pc_ip=None, port=8069):
     """Every partition off the AP: gzip on the AP, POSTed to this PC.  For the
     small partitions the AP also hashes the raw flash first, and the two are
     compared, so a bad read cannot pass unnoticed."""
@@ -1670,6 +1768,24 @@ class Run:
         self.tftp = None
 
 
+def _cached_meta(cache, tag):
+    try:
+        with open(os.path.join(cache, tag, "release.json")) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _newest_cached(cache, tags, channel="stable"):
+    """The newest of these cached releases.  By publication date where the cache
+    recorded it, else by when it was saved: tag text sorts -9 after -10."""
+    tags = [t for t in tags if channel == "testing" or not _cached_meta(cache, t).get("prerelease")]
+    if not tags:
+        return None
+    return max(tags, key=lambda t: (_cached_meta(cache, t).get("published_at") or "",
+                                    os.path.getmtime(os.path.join(cache, t))))
+
+
 def _cache_ok(cache, tag, model):
     """Everything this model needs for `tag`, already on this PC?"""
     d = os.path.join(cache, tag)
@@ -1688,7 +1804,7 @@ def release_files(a, model):
     cache = os.path.abspath(a.files)
     if not a.offline:
         try:
-            d, tag = m.fetch_release(a.tag, [model], cache)
+            d, tag = m.fetch_release(a.tag, [model], cache, getattr(a, "channel", "stable"))
             n = m.files_for(model)
             return (os.path.join(d, n["itb"]), os.path.join(d, n["ubi"]),
                     os.path.join(d, n["sums"]), tag)
@@ -1708,10 +1824,10 @@ def release_files(a, model):
     if not tag:
         cands = [x for x in os.listdir(cache)
                  if _cache_ok(cache, x, model)[0]] if os.path.isdir(cache) else []
-        if not cands:
+        tag = _newest_cached(cache, cands, getattr(a, "channel", "stable"))
+        if not tag:
             m.die("no release on this PC and GitHub is unreachable.  Run once with "
                   "a connection, or copy %s\\ into %s" % ("<tag>", cache))
-        tag = sorted(cands)[-1]
     d, want = _cache_ok(cache, tag, model)
     if not d:
         m.die("the cached release %s is incomplete in %s" % (tag, os.path.join(cache, tag)))
@@ -1858,7 +1974,11 @@ def main():
     ap.add_argument("--password", help="that user's password (default: none on "
                                       "OpenWrt, 'config' on Arista's firmware)")
     ap.add_argument("--ap-ip", help="the address U-Boot uses (default host/24 .230)")
-    ap.add_argument("--tag", help="release tag (default: newest)")
+    ap.add_argument("--tag", help="release tag (default: the newest release that has this AP's model)")
+    ap.add_argument("--channel", choices=("stable", "testing"), default="stable",
+                    help="testing also takes pre-release builds (default: %(default)s)")
+    ap.add_argument("--list-releases", action="store_true",
+                    help="show which models each release carries, and stop")
     ap.add_argument("--files", default=RELEASES, help="release cache (default: %(default)s)")
     ap.add_argument("--backup-dir", help="where to save the firmware (default backups/<model>-<mac>)")
     ap.add_argument("--backup-only", action="store_true", help="download the firmware and stop")
@@ -1883,6 +2003,9 @@ def main():
     ap.add_argument("--yes-install", action="store_true", help="no MAC prompt at the install")
     a = ap.parse_args()
 
+    if a.list_releases:
+        list_cmd()
+        return
     if not a.host and not a.restore and not a.installer_at:
         m.die("give --host (an AP on its factory firmware), --restore DIR, or --installer-at IP")
     run = Run(a.yes, a.yes_install, a.user, a.password)
@@ -2001,7 +2124,7 @@ def main():
                 outdir = a.backup_dir or os.path.join(BACKUPS, "%s-%s" % (
                     card["model"], card["mac"].replace(":", "")),
                     time.strftime("%Y%m%d-%H%M%S"))
-                manifest = download_firmware(shell, card, outdir, include_slot1=not a.fast,
+                manifest = download_firmware(run, shell, card, outdir, include_slot1=not a.fast,
                                              pc_ip=pc_ip)
                 backup_dir = outdir
             if a.backup_only:
