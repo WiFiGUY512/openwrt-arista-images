@@ -1372,7 +1372,13 @@ def netboot_env(pc_ip, ap_ip, itb_name, cfg, load="0x60000000"):
     Two fetch attempts: from a bootcmd U-Boot runs ~2 s after power-on and the
     AQR114C can still report the link Down."""
     clear = 'setenv bootcmd "run ubootscript"; saveenv'
-    fetch = ("setenv ipaddr %s; setenv gatewayip %s; setenv serverip %s; "
+    # netretry=no, RAM-only and inside owrt_nb so it is never saved: this
+    # U-Boot otherwise keeps retrying a fetch with no answer for ever, which
+    # means the reset below is never reached and the unit waits for a power
+    # cycle (seen 2026-10-26).  Two tftpboot calls remain, so a slow link still
+    # gets a second chance.
+    fetch = ("setenv netretry no; "
+             "setenv ipaddr %s; setenv gatewayip %s; setenv serverip %s; "
              "setenv fdt_high 0x4A3E0000; "
              "setenv bootargs console=ttyMSM0,115200n8 rootwait panic=0; "
              "sleep 5; tftpboot %s %s && bootm %s#%s; "
