@@ -37,11 +37,9 @@ with a console cable, and is worth reading before you run either.
 
 ## Status
 
-- **C-230:** first install done on one unit (2026-10-22). This guide's
-  exact steps, with these files, are being run on a second unit now.
-- **C-260:** units that already run the port update with sysupgrade. A
-  first install with these files has not been run yet; see
-  [C-260](#first-install-c-260).
+**[STATUS.md](STATUS.md)**: every published build and its number, which
+models the field updater can install, upstream progress, and the known
+issues.
 
 ## What the install changes
 
