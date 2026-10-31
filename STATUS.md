@@ -1,8 +1,8 @@
 # Status
 
-Generated 2026-10-31 01:17 UTC from the releases, the field updater, the OpenWrt pull
+Generated 2026-10-31 14:49 UTC from the releases, the field updater, the OpenWrt pull
 requests and the port's bug ledger. Every build here is OpenWrt main
-(Linux 6.18) with this port's patches (41 of them in build 63).
+(Linux 6.18) with this port's patches (53 of them in build 76).
 
 ## At a glance
 
@@ -14,22 +14,23 @@ requests and the port's bug ledger. Every build here is OpenWrt main
 | Field installs proven on real units | `████░░░░░░` 40% | 2 of 5: C-230, C-260 |
 | Device support submitted to OpenWrt | `██████████` 100% | 5 of 5 pull requests |
 | Device support merged into OpenWrt | `░░░░░░░░░░` 0% | 0 of 5; all are waiting for review |
-| Known issues resolved | `███░░░░░░░` 32% | 37 of 115 in the port's bug ledger ([below](#known-issues)) |
+| Known issues resolved | `████░░░░░░` 36% | 42 of 118 in the port's bug ledger ([below](#known-issues)) |
 
 ## Published builds
 
-The build number is the middle of the tag: `v2026.10.17.1-63-g1f746ea` is build **63**, the
-63rd port commit after release v2026.10.17.1, from port commit `1f746ea`.
+The build number is the middle of the tag: `v2026.10.17.1-76-g858405e` is build **76**, the
+76th port commit after release v2026.10.17.1, from port commit `858405e`.
 From build 57 on, a unit names its build: `grep DISTRIB_DESCRIPTION
 /etc/openwrt_release` ends in `(arista <tag>)`, as does LuCI's firmware version.
 
 | Build | Released (UTC) | Channel | Models | What it brought |
 |---|---|---|---|---|
-| **[63](https://github.com/WiFiGUY512/openwrt-arista-images/releases/tag/v2026.10.17.1-63-g1f746ea)** | 2026-10-31 | testing | C-230, C-260, C-360, W-318, W-118 | Clients keep their uplink with BSS colour off (OpenWrt sent no Spatial Reuse element then, and phones ignored the AP's weaker frames); sent upstream as openwrt/openwrt#26326. |
-| [62](https://github.com/WiFiGUY512/openwrt-arista-images/releases/tag/v2026.10.17.1-62-ge144ddb) | 2026-10-29 | testing, replaced by 63 | C-230, C-260, C-360, W-318, W-118 | Client signal levels read true on ath11k radios (C-360, C-260, C-230, W-318): they read up to 7 dB low on noisy channels. |
-| [61](https://github.com/WiFiGUY512/openwrt-arista-images/releases/tag/v2026.10.17.1-61-gefd854b) | 2026-10-29 | testing, replaced by 63 | C-230, C-260, C-360, W-318, W-118 | 5 GHz keeps its speed after a channel change (C-360, C-260: it fell to a tenth after automatic channel moves). The C-360's QCN9072 offers both its streams. Images name their build. `dfs-look` works again. |
-| [55](https://github.com/WiFiGUY512/openwrt-arista-images/releases/tag/v2026.10.17.1-55-g876a7de) | 2026-10-28 | testing, replaced by 63 | C-230, C-260, C-360, W-318, W-118 | Faster client joins on networks without PMF. 5 GHz starts outside DFS channels; `dfs-look` moves it to DFS later only where that is clearly better. A disabled radio no longer changes the country. RADIUS accounting sent once. No fake noise floor from the C-360's QCN9074/QCN9072 cards. HT/VHT on those cards' 5 GHz. |
-| [46](https://github.com/WiFiGUY512/openwrt-arista-images/releases/tag/v2026.10.17.1-46-g704bd6a) | 2026-10-28 | testing, replaced by 63 | C-230, C-260, C-360, W-318, W-118 | Daemons survive a ubusd restart. airscan probes far less. A sysupgrade's final reboot is watched. First W-118 images. |
+| **[76](https://github.com/WiFiGUY512/openwrt-arista-images/releases/tag/v2026.10.17.1-76-g858405e)** | 2026-10-31 | testing | C-230, C-260, C-360, W-318, W-118 | 5 GHz comes back after a configuration change on a DFS channel (hostapd skipped the radar check and the radio stayed off); hostapd and wpa_supplicant no longer crash on every stop; a forced channel switch goes where it was sent; no more "Unexpected Link measurement report" log flood; RADIUS, ucode and uclient fixes. |
+| [63](https://github.com/WiFiGUY512/openwrt-arista-images/releases/tag/v2026.10.17.1-63-g1f746ea) | 2026-10-31 | testing, replaced by 76 | C-230, C-260, C-360, W-318, W-118 | Clients keep their uplink with BSS colour off (OpenWrt sent no Spatial Reuse element then, and phones ignored the AP's weaker frames); sent upstream as openwrt/openwrt#26326. |
+| [62](https://github.com/WiFiGUY512/openwrt-arista-images/releases/tag/v2026.10.17.1-62-ge144ddb) | 2026-10-29 | testing, replaced by 76 | C-230, C-260, C-360, W-318, W-118 | Client signal levels read true on ath11k radios (C-360, C-260, C-230, W-318): they read up to 7 dB low on noisy channels. |
+| [61](https://github.com/WiFiGUY512/openwrt-arista-images/releases/tag/v2026.10.17.1-61-gefd854b) | 2026-10-29 | testing, replaced by 76 | C-230, C-260, C-360, W-318, W-118 | 5 GHz keeps its speed after a channel change (C-360, C-260: it fell to a tenth after automatic channel moves). The C-360's QCN9072 offers both its streams. Images name their build. `dfs-look` works again. |
+| [55](https://github.com/WiFiGUY512/openwrt-arista-images/releases/tag/v2026.10.17.1-55-g876a7de) | 2026-10-28 | testing, replaced by 76 | C-230, C-260, C-360, W-318, W-118 | Faster client joins on networks without PMF. 5 GHz starts outside DFS channels; `dfs-look` moves it to DFS later only where that is clearly better. A disabled radio no longer changes the country. RADIUS accounting sent once. No fake noise floor from the C-360's QCN9074/QCN9072 cards. HT/VHT on those cards' 5 GHz. |
+| [46](https://github.com/WiFiGUY512/openwrt-arista-images/releases/tag/v2026.10.17.1-46-g704bd6a) | 2026-10-28 | testing, replaced by 76 | C-230, C-260, C-360, W-318, W-118 | Daemons survive a ubusd restart. airscan probes far less. A sysupgrade's final reboot is watched. First W-118 images. |
 | **[42](https://github.com/WiFiGUY512/openwrt-arista-images/releases/tag/v2026.10.17.1-42-g4949f0e)** | 2026-10-26 | **stable** (latest) | C-230, C-260, C-360, W-318 | First C-360 and W-318 images. ath11k noise-floor, beacon-stats and monitor-mode fixes. |
 | [41](https://github.com/WiFiGUY512/openwrt-arista-images/releases/tag/v2026.10.17.1-41-gb4ecbba) | 2026-10-25 | stable, older | C-230, C-260 | Installer files (RAM installer, factory image, checksums) for both. |
 | [40](https://github.com/WiFiGUY512/openwrt-arista-images/releases/tag/v2026.10.17.1-40-g2a240ea) | 2026-10-25 | stable, older | C-230, C-260 | First build on OpenWrt main (sysupgrade images only). |
@@ -38,11 +39,11 @@ From build 57 on, a unit names its build: `grep DISTRIB_DESCRIPTION
 
 | Model | OpenWrt target | Stable build | Testing build | Field updater | OpenWrt pull request |
 |---|---|---|---|---|---|
-| C-230 | qualcommax/ipq807x | 42 | 63 | install and revert, proven | [#26136](https://github.com/openwrt/openwrt/pull/26136) (open) |
-| C-260 | qualcommax/ipq807x | 42 | 63 | install and revert, proven | [#25937](https://github.com/openwrt/openwrt/pull/25937) (open) |
-| C-360 | qualcommax/ipq807x | 42 | 63 | install and revert, code-ready, not yet run on a unit | [#25941](https://github.com/openwrt/openwrt/pull/25941) (open) |
-| W-318 | qualcommax/ipq60xx | 42 | 63 | images only; first install by console | [#25947](https://github.com/openwrt/openwrt/pull/25947) (open) |
-| W-118 | ipq40xx/generic | none yet | 63 | images only; first install by console | [#26028](https://github.com/openwrt/openwrt/pull/26028) (open) |
+| C-230 | qualcommax/ipq807x | 42 | 76 | install and revert, proven | [#26136](https://github.com/openwrt/openwrt/pull/26136) (open) |
+| C-260 | qualcommax/ipq807x | 42 | 76 | install and revert, proven | [#25937](https://github.com/openwrt/openwrt/pull/25937) (open) |
+| C-360 | qualcommax/ipq807x | 42 | 76 | install and revert, code-ready, not yet run on a unit | [#25941](https://github.com/openwrt/openwrt/pull/25941) (open) |
+| W-318 | qualcommax/ipq60xx | 42 | 76 | images only; first install by console | [#25947](https://github.com/openwrt/openwrt/pull/25947) (open) |
+| W-118 | ipq40xx/generic | none yet | 76 | images only; first install by console | [#26028](https://github.com/openwrt/openwrt/pull/26028) (open) |
 
 ## The field updater: `arista-field.py`
 
@@ -53,7 +54,7 @@ then installs OpenWrt or puts Arista's firmware back.
 - **Stable channel** (default): the newest non-test release that carries the
   AP's model. Today that is build 42.
 - **Testing channel** (`--channel testing`): pre-releases too. Today that is
-  build 63.
+  build 76.
 - It boots the FIT configuration it finds in the image rather than a fixed
   name, so a model whose configuration changed between OpenWrt trees (the
   C-360: `config@1` on 25.12, `config@hk09` on main) boots either.
@@ -82,11 +83,11 @@ anything Arista worked around instead of fixing.
 
 | | Count |
 |---|---:|
-| Fixed in published images | 27 |
+| Fixed in published images | 32 |
 | Closed: a hardware or firmware limit, by design, or not this port's to fix | 10 |
-| Open: seen on OpenWrt, or being worked on | 55 |
+| Open: seen on OpenWrt, or being worked on | 53 |
 | Open: suspected only, from Arista's own workarounds and public release notes, not yet seen on OpenWrt | 23 |
-| **Total** | **115** |
+| **Total** | **118** |
 
 Limits worth knowing before you install:
 
