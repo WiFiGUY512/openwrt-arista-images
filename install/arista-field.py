@@ -660,6 +660,19 @@ MODELS = {
                   "once at the U-Boot prompt, then sysupgrade -n its sysupgrade "
                   "image",
     },
+    "c200": {
+        "name": "C-200",
+        "target": "qualcommax/ipq60xx",
+        "device": "arista_c-200",
+        "fit_cfg": "config@cp01-c3",
+        # The C-230's flash scheme (factory.ubi into NAND slot 0), but its
+        # factory firmware's way in has not been run through this tool.
+        "field_install": False,
+        "manual": "RAM-boot its initramfs over TFTP from the console "
+                  "(bootm 0x60000000#config@cp01-c3), back up the flash, "
+                  "ubiformat slot 0 with its factory.ubi, then set the boot "
+                  "command once (c200/INSTALL.md in the port)",
+    },
 }
 
 
