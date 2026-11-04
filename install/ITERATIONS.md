@@ -4,7 +4,7 @@ Every entry below is a change forced by something that actually happened on a
 unit, not a tidy-up. The commit ids are in the public repo
 `WiFiGUY512/openwrt-arista-images`, under `install/`.
 
-## 2026-10-25 â€” first day, C-230
+## 2026-10-25 — first day, C-230
 
 | # | What changed | Why |
 |---|---|---|
@@ -18,7 +18,7 @@ unit, not a tidy-up. The commit ids are in the public repo
 | 8 | `ask()` refuses without a terminal | an `input()` with piped stdin blocked for ever and left a run looking alive while doing nothing |
 | 9 | `--offline`, and a cache fallback | a site with no uplink failed even with the release already downloaded |
 | 10 | C-260 as a `MODELS` entry | one script for both models |
-| 11 | NOR decided by erase size, backup in either order | the C-230 lists NOR first and slots last, the C-260 the reverse; on a C-260 the old logic saw zero NOR partitions (refusing to run) and would have backed up the slots only â€” losing NOR and ART |
+| 11 | NOR decided by erase size, backup in either order | the C-230 lists NOR first and slots last, the C-260 the reverse; on a C-260 the old logic saw zero NOR partitions (refusing to run) and would have backed up the slots only — losing NOR and ART |
 | 12 | tool moved to `tools\arista-field\`, releases to `firmware\releases\` | it outgrew a per-model folder; paths are discovered rather than assumed, so the same file runs from this project, from the published repo, or from a copy |
 | 13 | ask the installer what it supports before calling it | the C-260's shipped script has no `--no-backup` and wants >512 MiB free for its own backup, while the RAM installer's `/tmp` reports 432 MiB: the dry run answered with a usage line. It now greps the script, passes the flag only if present, and otherwise stages on a 768M tmpfs |
 | 14 | reconnect when the factory shell has expired | a 3.5 min backup plus a slow answer at the menu outlived Arista's one-minute helper, and the first `fw_setenv` hit `Socket is closed` |
@@ -40,9 +40,10 @@ unit, not a tidy-up. The commit ids are in the public repo
   three radios up -- ath10k_pci + 2x ath11k -- board data and Bluetooth PS keys
   copied from the Arista slot); and a full revert at 19:13Z, slot 0 and
   `0:APPSBLENV` both reading back identical, back on Arista at 192.168.1.25.
-- **Not yet:** a revert on a C-260 (the path is the C-230's, already exercised),
-  and a unit whose factory password was changed (the `--user/--password` route
-  is untested on hardware).
+- **C-260 again, 2026-10-27:** installed with release 42 (whose C-260 installer
+  takes `--no-backup`), resumed with `--installer-at` after an interrupted run.
+- **Not yet:** a C-360 on a real unit, and a unit whose factory password was
+  changed (the `--user/--password` route is untested on hardware).
 
 ## Deliberate design points (do not "simplify" these away)
 

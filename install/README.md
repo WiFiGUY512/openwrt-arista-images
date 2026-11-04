@@ -23,6 +23,17 @@ command line: `--install`, `--restore DIR`, `--backup-only`, `--yes`,
 
 ---
 
+## Tested on real units
+
+| Model (Arista firmware) | Run | Result |
+|---|---|---|
+| C-230 (8.9.0-63.1) | stock → OpenWrt, twice (2026-10-25) | installed, came up at its DHCP address, found by MAC |
+| C-230 (8.9.0-63.1) | OpenWrt → its own firmware, twice | slot 0 and environment read back **byte-identical** to the backup, booted Arista 8.9.0-63.1 |
+| C-260 (11.0.1-49.8) | `--backup-only` (2026-10-25) | 26 partitions, ART included, each matching the AP's own hash |
+| C-260 (11.0.1-49.8) | stock → OpenWrt (2026-10-25, and again with release 42 on 2026-10-27) | installed, Arista kept in slot 1; three radios up, board data and Bluetooth keys taken from Arista's slot |
+| C-260 (11.0.1-49.8) | OpenWrt → its own firmware (2026-10-25) | slot 0 and environment read back **byte-identical**, booted Arista 11.0.1 |
+| C-360 | (none yet) | in the tool, not yet run on a unit |
+
 ## What it needs
 
 - This PC on a network that can reach the AP (same subnet or routed to it).
@@ -128,9 +139,18 @@ without writing anything.
 
 ## Known limits
 
-- **C-230 only.** `MODELS` in the script holds the per-model facts (FIT config,
-  slot and environment partition names, installer name). The C-260 is next; its
-  layout and command set must come from the C-260's own firmware, not the C-360's.
+- **Models.** Install and revert with no console: C-230 and C-260, both proven
+  on real units, and the C-360 (in the tool, not yet run on a unit). The W-318,
+  W-118 and C-200 are listed and their images fetched and verified, but their
+  first install is by console. `MODELS` in the script holds the per-model facts
+  (FIT config, slot and environment partition names, installer name), each taken
+  from that model's own firmware.
+- **Arista firmware versions.** The way in was read in, and run on, C-230
+  8.9.0-63.1 and C-260 11.0.1-49.8. Another Arista version may differ:
+  `--backup-only` shows whether the tool gets in, and writes nothing.
+- **Used units.** The factory account is `config`, password `config`. A unit
+  that was centrally managed before may have had it changed: give it with
+  `--user config --password <pw>`, or reset the AP to factory defaults first.
 - Arista's injected shell lives about a minute before its own upgrade service
   gives up and reboots. The tool writes short commands one at a time and does not
   depend on long-lived shell state.
@@ -147,7 +167,9 @@ without writing anything.
   **without `--tag` the tool takes the newest release that actually has this
   AP's model**, newest first by publication date. `--list-releases` shows what
   each one has; `--tag T` pins one (and stops if it lacks the model);
-  `--channel testing` also accepts pre-release builds. Where a release carries
+  `--channel testing` also accepts pre-release builds. New builds go out as
+  testing first and become stable after a soak, so the newest build is usually
+  on the testing channel; [STATUS.md](../STATUS.md) lists both. Where a release carries
   an `index.json`, the tool checks the files against it as well as against
   `SHA256SUMS`.
 - **The AP never talks to GitHub, or to the internet at all.** U-Boot pulls the
@@ -203,9 +225,11 @@ Notes that matter for the C-260:
   `/tmp/offline` guard, so that C-230 failure mode does not exist on it. Its
   `version` command prints what this tool parses (`The device model is C-260.`,
   `Device Build: [...]`), so the model is read, not asked for.
-- **Status.** Still to run on a real C-260. Everything the installer then does
-  is the C-260's own tested script, but the round trip through this tool (env
-  write, TFTP fetch, RAM installer, slot 0, first boot) has not been done on
-  that model. First run should be `--backup-only`, which writes nothing.
+- **Status.** Proven on a C-260 (Arista 11.0.1-49.8): backup, install and
+  revert end to end on 2026-10-25, and installed again with release 42 on
+  2026-10-27. From release 42 on, the C-260's installer takes `--no-backup`
+  like the C-230's; for an older installer the tool stages on a 768 MiB tmpfs
+  instead, which also works but takes longer. First run on any new unit should
+  still be `--backup-only`, which writes nothing.
 - The fallback is the same shape as the C-230's: the netboot `bootcmd` restores
   Arista's own boot and resets if the TFTP fetch fails.

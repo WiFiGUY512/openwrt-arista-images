@@ -1,7 +1,12 @@
 # Quickstart: one AP, no console cable
 
-You need: a PC that can reach the AP over the network, Python 3, and the AP
-powered and on its factory firmware.
+For the Arista C-230 and C-260 (both proven on real units) and the C-360.
+
+You need: a PC that can reach the AP over the network, Python 3, the AP
+powered and on its factory firmware, and a DHCP server on the AP's network
+(the temporary installer takes its address that way). On Windows, allow Python
+through the firewall when it asks: the AP sends its backup to this PC on TCP
+8069 and fetches the installer over TFTP (UDP 69).
 
 ## 1. Get the script
 
@@ -36,6 +41,11 @@ If you are unsure which build the tool will take, ask it first — it needs no A
 python arista-field.py --list-releases
 ```
 
+By default it takes the newest **stable** build. New builds are published as
+**testing** first and become stable after a soak, so the newest build is
+usually testing: add `--channel testing` in step 4 to take it.
+[STATUS.md](../STATUS.md) lists every build and what it fixed.
+
 ## 3. Save the AP's firmware first (writes nothing)
 
 ```sh
@@ -51,6 +61,12 @@ the AP's own hash. It takes about four minutes and changes nothing on the AP.
 
 ```sh
 python arista-field.py --host <AP address>
+```
+
+or, for the newest (testing) build:
+
+```sh
+python arista-field.py --host <AP address> --channel testing
 ```
 
 ```
@@ -69,9 +85,11 @@ you would rather the tool wait for it and check.
 
 ## If something goes wrong
 
-- **"cannot log in ... (tried root, config)"** — Arista's account is `config`;
-  if its password was changed, add `--user config --password <pw>`. A locked or
-  already-OpenWrt unit needs `--installer-at <address>` instead.
+- **"cannot log in ... (tried root, config)"** — Arista's account is `config`,
+  factory password `config`. A used unit may have had it changed by its
+  previous owner's management: add `--user config --password <pw>`, or reset
+  the AP to factory defaults and try again. A locked or already-OpenWrt unit
+  needs `--installer-at <address>` instead.
 - **"this run needs an answer ... and there is no terminal"** — you are running
   it from something that is not a terminal. Add `--install` (and `--yes`) or run
   it in a normal terminal window.

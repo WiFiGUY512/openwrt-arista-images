@@ -197,24 +197,31 @@ The same steps, with these changes:
 
 - **Step 2:** use `openwrt-qualcommax-ipq807x-arista_c-260-initramfs-uImage.itb`
   and `bootm 0x60000000#config@hk01`. The board name is `arista,c-260`.
-- **Steps 4-6:** the C-260's installer, `arista-c260-install`, always takes
-  its own backup, and it needs more room than the AP's RAM has. So it needs
-  a FAT32 USB stick (1 GB or more) with a `c260/` folder holding
-  `factory.ubi` and `SHA256SUMS` (that is, `c260-install-SHA256SUMS`).
-  Plug the stick in after step 2, then run:
+- **Steps 4-6:** use release 42 or later for every file (the RAM installer
+  in step 2 included): from release 42 on, the C-260's installer,
+  `arista-c260-install`, takes `--no-backup` like the C-230's. Steps 5
+  and 6 for the C-260 are then:
 
   ```
-  arista-c260-install --dry-run
-  arista-c260-install
+  mkdir -p /tmp/c260 && cd /tmp/c260
+  wget -O factory.ubi https://github.com/WiFiGUY512/openwrt-arista-images/releases/download/v2026.10.17.1-42-g4949f0e/openwrt-qualcommax-ipq807x-arista_c-260-squashfs-factory.ubi
+  wget -O SHA256SUMS https://github.com/WiFiGUY512/openwrt-arista-images/releases/download/v2026.10.17.1-42-g4949f0e/c260-install-SHA256SUMS
+  arista-c260-install --dry-run --no-backup --stick /tmp/c260
+  arista-c260-install --no-backup --stick /tmp/c260
   ```
 
-  It finds the stick and writes a verified backup of every partition to it.
+  Release 41's C-260 installer has no `--no-backup`. It always takes its
+  own backup and needs a FAT32 USB stick (1 GB or more) with a `c260/`
+  folder holding `factory.ubi` and `SHA256SUMS`.
 - **Before you start:** check which slot Arista runs from, with
   `fw_printenv pri`. `pri=1` is the usual case. With `pri=0`, Arista runs
   from slot 0, which the install replaces, and slot 1 holds an older
   Arista. The installer warns, and goes on only if you confirm.
-- **Not yet run:** these files have not been through a C-260 first install.
-  If you are first, open an issue with how it went.
+- **Tested:** C-260 first installs have run on a real unit through
+  [`arista-field.py`](install/README.md), which drives these same
+  installer commands over the network (2026-10-25, and with release 42 on
+  2026-10-27), and so has putting Arista's firmware back. The by-hand
+  console route above has not been run end to end on a C-260.
 
 ## Alternative: a USB stick for the C-230
 
