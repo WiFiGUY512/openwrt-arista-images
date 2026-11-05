@@ -30,6 +30,7 @@ unit, not a tidy-up. The commit ids are in the public repo
 | 20 | `--files` accepts a plain folder of images | not everyone has a release to fetch; pointing at a folder that holds the four files plus SHA256SUMS now works, verified the same way |
 | 21 | the release is chosen per model, not 'the latest' | releases come out one per build and not every one carries every model; without `--tag` the tool walks them newest-first by publication date and takes the first that has this AP's model. `index.json` (when present) is checked as well as `SHA256SUMS`; `--channel testing`, `--tag` pinning, `--list-releases` |
 | 22 | two bugs found by that review | `download_firmware()` called `ensure_shell(run, ...)` with no `run` in scope -- any run taking a fresh backup died with NameError; and offline caching took `sorted(cands)[-1]`, i.e. tag *text*, which puts `-9-` after `-42-`. Both fixed |
+| 23 | version-agnostic model detect and prompts (**tool 1.1**; `--version` added) | a C-260 on firmware 16.1.0-51.6 (not the 11.0.1-49 the tool was read on) answered `version` with "Invalid command", and its `upgrade` dialogue asks "Continue? [y]/n:" / "Confirm? [y]/n:" instead of 11.x's "([y]/n)". Fall back to `show device info` when `version` names no model; parse the colon firmware form; make the Continue/Confirm matchers accept optional parens. The upgrade script itself is unchanged across the two builds, so only the wording needed loosening |
 
 ## What is proven, and on what
 
@@ -42,8 +43,12 @@ unit, not a tidy-up. The commit ids are in the public repo
   `0:APPSBLENV` both reading back identical, back on Arista at 192.168.1.25.
 - **C-260 again, 2026-10-27:** installed with release 42 (whose C-260 installer
   takes `--no-backup`), resumed with `--installer-at` after an interrupted run.
-- **Not yet:** a C-360 on a real unit, and a unit whose factory password was
-  changed (the `--user/--password` route is untested on hardware).
+- **Not yet:** a C-360 on a real unit; a unit whose factory password was
+  changed (the `--user/--password` route is untested on hardware); and a full
+  install on firmware 16.x end to end -- the model-detect and prompt matchers
+  are fixed and self-tested, but the post-`Continue` sequence on 16.x is driven
+  on the assumption that its upgrade script matches 11.x's. A 16.x C-260 is the
+  confirmation.
 
 ## Deliberate design points (do not "simplify" these away)
 

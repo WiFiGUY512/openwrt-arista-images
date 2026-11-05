@@ -53,6 +53,13 @@ API = os.environ.get("ARISTA_FIELD_API", "https://api.github.com").rstrip("/")
 # written by publish-release.py).  Releases older than it are matched by file name.
 INDEX = "index.json"
 
+# Tool version -- bump on every change to how the tool drives an AP.
+#   1.0  first field tool; proven on the C-230 and C-260 (Arista 11.0.1), 2026-10.
+#   1.1  Arista firmware 16.x: read the model from 'show device info' when
+#        'version' is gone, and accept the 16.x "Continue?/Confirm? [y]/n:"
+#        prompt wording as well as 11.x's "([y]/n)" (2026-11-04).
+TOOL_VERSION = "1.1"
+
 # ---------------------------------------------------------------------------
 # Helpers carried in this file on purpose: a field installer has to be ONE
 # file somebody can download and run.  These are the ones proven on the bench
@@ -933,6 +940,15 @@ def _connect_once(host, user=None, password=None):
     pty.send("version")
     time.sleep(3)
     text = pty.since(mk)
+    # Firmware 16.x dropped the 'version' command ("Invalid command") and prints
+    # the same facts under 'show device info' instead (seen on a C-260, build
+    # 16.1.0-51.6, 2026-11-04).  Fall back to it whenever 'version' did not name
+    # a model; 11.x still answers 'version', so this is additive.
+    if not any(d["name"] in text for d in MODELS.values()):
+        mk2 = pty.mark()
+        pty.send("show device info")
+        time.sleep(3)
+        text += "\n" + pty.since(mk2)
     model = None
     for key, d in MODELS.items():
         if d["name"] in text:
@@ -943,14 +959,19 @@ def _connect_once(host, user=None, password=None):
         # Before 'upgrade': whether it gives a W-model a root shell is unchecked.
         refuse_unsupported(model)
     fw = None
-    for pat in (r"Device Build:\s*\[([^\]]+)\]", r"Device Version:\s*\[([^\]]+)\]"):
+    for pat in (r"Device Build\s*:\s*\[([^\]]+)\]",   # 11.x: Device Build: [X]
+                r"Device Build\s*:\s*([0-9]\S*)",      # 16.x: Device Build   : X
+                r"Device Version\s*:\s*\[([^\]]+)\]",
+                r"Device Version\s*:\s*([0-9]\S*)"):
         mm = re.search(pat, text)
         if mm:
             fw = mm.group(1).strip()
             break
     m.say("  This AP is an Arista %s, firmware %s." % (MODELS[model]["name"], fw or "?"))
     pty.send("upgrade")
-    if not pty.wait(r"Continue\? \(\[y\]/n\)", 30):
+    # Prompt punctuation varies by build: 11.x asks "Continue? ([y]/n)", 16.x
+    # "Continue? [y]/n:".  Match either -- optional parens, flexible spacing.
+    if not pty.wait(r"Continue\?\s*\(?\[y\]/n\)?", 30):
         m.die("'upgrade' did not offer to continue: offline mode, or another build.")
     pty.send("y")
     pty.wait(r"Enter upgrade build version string", 30)
@@ -958,9 +979,11 @@ def _connect_once(host, user=None, password=None):
     pty.wait(r"Enter upgrade build vendor version", 30)
     pty.send("1")
     if not pty.wait(r"Server IP Address or Upgrade path", 30):
-        m.die("the upgrade flow did not ask for a server address")
+        m.die("the upgrade flow did not ask for a server address the usual way;\n"
+              "run 'upgrade' by hand once and send the full prompt sequence so the\n"
+              "tool can be matched to this build.")
     pty.send("http://%s/;sh</dev/tty>/dev/tty;" % host)
-    if not pty.wait(r"Confirm\? \(\[y\]/n\)", 90):
+    if not pty.wait(r"Confirm\?\s*\(?\[y\]/n\)?", 90):
         m.die("no confirm prompt:\n%s" % pty.since(0).strip()[-800:])
     pty.send("y")
     time.sleep(10)
@@ -1786,7 +1809,13 @@ def find_stock(prefix, timeout):
                 return None
             pty.send("version")
             time.sleep(1.5)
-            return ip, pty.since(0)
+            text = pty.since(0)
+            # Firmware 16.x has no 'version'; 'show device info' prints the same.
+            if "Device Build" not in text and "Device Version" not in text:
+                pty.send("show device info")
+                time.sleep(1.5)
+                text = pty.since(0)
+            return ip, text
 
         got = _first_answer(live, prefix, probe_stock)
         if got:
@@ -2077,6 +2106,8 @@ def newest_backup(model, mac):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap.add_argument("--version", action="version",
+                    version="arista-field %s" % TOOL_VERSION)
     ap.add_argument("--host", help="the AP's address")
     ap.add_argument("--pc-ip", help="this PC as the AP sees it")
     ap.add_argument("--user", help="log in as this user (default: root on OpenWrt, "
@@ -2128,7 +2159,7 @@ def main():
     work = os.path.abspath("field-run-%s" % time.strftime("%Y%m%d-%H%M%S"))
     os.makedirs(work, exist_ok=True)
     m.LOG.open(os.path.join(work, "run.log"))
-    m.say("arista-field: log in %s" % work)
+    m.say("arista-field %s: log in %s" % (TOOL_VERSION, work))
 
     # ---- restore from a saved backup only (no AP contact yet) --------------
     if a.restore and not a.host:
