@@ -46,6 +46,14 @@ import threading
 import time
 import urllib.request
 
+# A Windows console is often cp1252: any non-ASCII byte -- from this script or
+# from the AP -- would otherwise raise UnicodeEncodeError mid-run.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = "WiFiGUY512/openwrt-arista-images"
 # The GitHub API.  ARISTA_FIELD_API points it elsewhere (the tests' local mock).
@@ -322,7 +330,7 @@ def release_index(rel):
                 try:
                     _INDEXES[tag] = json.load(http_get(a["browser_download_url"]))
                 except Exception as e:
-                    say("  %s: its %s is unreadable (%s); going by file names" % (tag, INDEX, e))
+                    note("%s: its %s is unreadable (%s); going by file names" % (tag, INDEX, e))
     return _INDEXES[tag]
 
 
@@ -525,12 +533,27 @@ def ask(prompt, hint):
     return input(prompt)
 
 
+# How much to say.  The screen is for someone standing next to an AP: one line
+# per step, and detail only when something goes wrong.  The log always gets
+# everything, and --verbose puts it back on the screen.
+VERBOSE = False
+
+
 def say(msg=""):
     """Every line carries the clock, on screen and in the log."""
     line = "" if msg is None else str(msg)
     if getattr(LOG, "f", None):
         LOG.write("\n### %s %s\n" % (time.strftime("%H:%M:%S"), line))
     print(("[%s] %s" % (time.strftime("%H:%M:%S"), line)) if line else "", flush=True)
+
+
+def note(msg):
+    """A normal event that would read as a problem.  Log always, screen only
+    with --verbose."""
+    if VERBOSE:
+        say("   " + str(msg))
+    elif getattr(LOG, "f", None):
+        LOG.write("\n### %s note: %s\n" % (time.strftime("%H:%M:%S"), msg))
 
 
 def phase(text):
@@ -546,29 +569,50 @@ THIS_RUN = None
 
 
 def step(title, why, hint):
-    """Announce a step: what it does, why, and what to try if it fails."""
+    """One line per step on screen; the reasoning goes to the log, and to the
+    screen only with --verbose."""
     STEP["n"] += 1
     STEP["title"] = title
     STEP["hint"] = hint
     say("")
-    say("--- step %d/%d  %s" % (STEP["n"], TOTAL_STEPS, title))
-    for line in str(why).splitlines():
-        say("      why:  " + line.strip())
-    for line in str(hint).splitlines():
-        say("      fail: " + line.strip())
+    say("%d/%d  %s" % (STEP["n"], TOTAL_STEPS, title))
+    if getattr(LOG, "f", None):
+        LOG.write("\n    why:  %s\n    if it fails: %s\n"
+                  % (str(why).replace("\n", " "), str(hint).replace("\n", " ")))
+    if VERBOSE:
+        for line in str(why).splitlines():
+            say("    " + line.strip())
 
 
 def die(msg):
-    """Stop, and say which step failed and what to do about it."""
+    """Stop, in plain words: what happened, what to do, and what was written."""
+    lines = [l.strip() for l in str(msg).strip().splitlines() if l.strip()]
     say("")
-    say("STOPPED: %s" % msg)
+    say("Couldn't continue: %s" % (lines[0] if lines else "unknown problem"))
+    # The rest of the message is part of the answer (for the W-models it is the
+    # manual procedure), so it stays -- just bounded, with the log for the rest.
+    for line in lines[1:12]:
+        say("   " + line)
+    if len(lines) > 12:
+        say("   ... (%d more lines in the log)" % (len(lines) - 12))
     if STEP["n"]:
-        say("  step %d/%d:   %s" % (STEP["n"], TOTAL_STEPS, STEP["title"]))
-        say("  what to try: %s" % STEP["hint"])
+        say("   step %d of %d: %s" % (STEP["n"], TOTAL_STEPS, STEP["title"]))
+    if STEP["hint"]:
+        hint = [l.strip() for l in str(STEP["hint"]).splitlines() if l.strip()]
+        say("   What to do: %s" % hint[0])
+        for line in hint[1:]:
+            say("               %s" % line)
+    written = []
     if THIS_RUN is not None:
-        say("  env writes so far:   %s" % (", ".join(THIS_RUN.env_writes) or "none"))
-        say("  flash writes so far: %s" % (", ".join(THIS_RUN.flash_writes) or "none"))
-    say("  full log: %s" % (os.path.join(os.getcwd(), "field-run-*") + "\\run.log"))
+        written = THIS_RUN.env_writes + THIS_RUN.flash_writes
+    if written:
+        say("   Written so far: %s" % ", ".join(written))
+        say("   The AP still boots its own firmware; nothing else was changed.")
+    else:
+        say("   Nothing was written to the AP.")
+    if getattr(LOG, "f", None):
+        LOG.write("\n    FULL: %s\n" % str(msg))
+    say("   Details: %s" % (os.path.join(os.getcwd(), "field-run-*") + "\\run.log"))
     sys.exit(1)
 
 
@@ -853,8 +897,8 @@ def ensure_shell(run, host, user, password, why):
     if shell_alive(run.shell):
         return run.shell
     m.say("")
-    m.say("  The AP's shell has gone (Arista's upgrade helper times out after about")
-    m.say("  a minute; %s took longer). Reconnecting." % why)
+    m.note("the AP's shell had gone (Arista's upgrade helper times out after about "
+           "a minute; %s took longer). Reconnecting." % why)
     try:
         run.shell.chan.get_transport().close()
     except Exception:
@@ -950,7 +994,7 @@ def root_via_radartool(pty):
     if not got:
         return False
     if "ash" not in got.group(0):
-        say("  no radartool here (%s); using Arista's upgrade wizard instead."
+        note("no radartool here (%s); using Arista's upgrade wizard instead."
             % got.group(0).strip()[:40])
         return False
     mk2 = pty.mark()
@@ -1628,10 +1672,10 @@ def boot_installer(run, card, pc_ip, ap_ip, itb, kind):
     mdl = MODELS[card["model"]]
     cfg, seen = fit_config_for(itb, mdl["fit_cfg"])
     if cfg != mdl["fit_cfg"]:
-        m.say("  this image boots %s (the %s default is %s); using what the image has"
-              % (cfg, mdl["name"], mdl["fit_cfg"]))
+        m.note("this image boots %s (the %s default is %s); using what the image has"
+               % (cfg, mdl["name"], mdl["fit_cfg"]))
     if not seen:
-        m.say("  (could not read a configuration name out of the image; using %s)" % cfg)
+        m.note("could not read a configuration name out of the image; using %s" % cfg)
     writes = netboot_env(pc_ip, ap_ip, short, cfg, mdl.get("load_addr", "0x60000000"))
     run.tftp = Tftp({short: itb, itb_name: itb})     # serve before the AP asks
     m.say("TFTP serving %s as %s on UDP 69." % (itb_name, short))
@@ -1644,7 +1688,7 @@ def boot_installer(run, card, pc_ip, ap_ip, itb, kind):
     m.say("the AP ends up on its own firmware; running this again costs nothing.")
     if not run.yes:
         m.say("(sensord is stopped while this shell is held: answer now.)")
-        if ask("Type 'env' to write it: ", "--yes").strip().lower() != "env":
+        if ask("Type 'yes' to go ahead: ", "--yes").strip().lower() not in ("y", "yes"):
             m.die("not confirmed; nothing was written")
 
     if kind == "stock":
@@ -1704,7 +1748,7 @@ def do_install(run, card, ip, ubi, sums):
                 sftp.put(local, remote)
                 sftp.close()
             except Exception as e:                       # noqa: BLE001
-                m.say("    (no sftp-server: %s; using a plain SSH channel)" % e)
+                m.note("no sftp-server on the AP (%s); sending over a plain SSH channel" % e)
                 chan = con.get_transport().open_session()
                 chan.exec_command("cat > %s" % remote)
                 with open(local, "rb") as f:
@@ -1733,17 +1777,17 @@ def do_install(run, card, ip, ubi, sums):
         free_mb = int(out.strip().split()[0]) // 1024
     except Exception:
         free_mb = 0
-    m.say("  installer %s: --no-backup %s, %s has %d MiB free"
-          % (inst, "supported" if no_backup else "NOT supported", stage, free_mb))
+    m.note("installer %s: --no-backup %s, %s has %d MiB free"
+           % (inst, "supported" if no_backup else "not supported", stage, free_mb))
     if not no_backup and free_mb < 600:
         big = "/mnt/" + card["model"] + "stage"
         size = "%dM" % MODELS[card["model"]].get("stage_mb", 768)
-        m.say("  it wants >512 MiB for its own backup: staging on a tmpfs")
+        m.note("the installer wants >512 MiB for its own backup; staging on a tmpfs")
         m.ssh_must(con, "mkdir -p %s; mountpoint -q %s || mount -t tmpfs -o size=%s none %s"
                    % (big, big, size, big), 60)
         m.ssh_must(con, "cp %s/SHA256SUMS %s/factory.ubi %s/" % (stage, stage, big), 300)
         stage = big
-        m.say("    staging on %s" % stage)
+        m.note("staging on %s" % stage)
     flags = "--dry-run --stick %s" if not no_backup else "--dry-run --no-backup --stick %s"
     flags = flags % stage
 
@@ -1880,7 +1924,7 @@ def do_restore(run, card, manifest, backup_dir):
     m.say("  This erases NAND slot 0 (%s) and writes the AP's own image back." % s0["dev"])
     m.say("  Slot 1 and every NOR partition except the environment stay as found.")
     if not run.yes:
-        if ask("  Type 'restore' to write it: ", "--yes").strip().lower() != "restore":
+        if ask("  Type 'yes' to go ahead: ", "--yes").strip().lower() not in ("y", "yes"):
             m.die("not confirmed; nothing was written")
 
     prefix = push_tools(con, ("flash_erase", "nandwrite"))
@@ -2272,7 +2316,7 @@ def newest_backup(model, mac):
         finally:
             if os.path.exists(raw):
                 os.remove(raw)
-        m.say("  (the backup in %s does not verify; ignoring it)" % name)
+        m.note("the backup in %s does not verify; ignoring it" % name)
     return None, None
 
 
@@ -2290,6 +2334,8 @@ def main():
     ap.add_argument("--tag", help="release tag (default: the newest release that has this AP's model)")
     ap.add_argument("--channel", choices=("stable", "testing"), default="stable",
                     help="testing also takes pre-release builds (default: %(default)s)")
+    ap.add_argument("--verbose", "-v", action="store_true",
+                    help="show the reasoning behind each step on screen too")
     ap.add_argument("--list-releases", action="store_true",
                     help="show which models each release carries, and stop")
     ap.add_argument("--fetch", metavar="MODEL",
@@ -2318,6 +2364,8 @@ def main():
     ap.add_argument("--yes", action="store_true", help="no prompts (still refuses on bad checks)")
     ap.add_argument("--yes-install", action="store_true", help="no MAC prompt at the install")
     a = ap.parse_args()
+    global VERBOSE
+    VERBOSE = a.verbose
 
     if a.list_releases:
         list_cmd()
@@ -2384,16 +2432,8 @@ def main():
     global THIS_RUN
     THIS_RUN = run
     step("Connect to the AP",
-         "Log in to %s and get a root shell without touching its flash or\n"
-         "environment (Arista's config shell, then its radartool's evaled args)."
-         % a.host,
-         "The AP must be powered, on the network, and on its factory firmware.\n"
-         "If it already runs OpenWrt, use --installer-at <its address> instead.\n"
-         "The root shell comes from 'radartool params ;sh; radio 0' (proven on\n"
-         "a C-260 at 16.1.0-51.6 and a C-360 at 8.9/11.x); where a build lacks\n"
-         "that, the tool falls back to Arista's own upgrade wizard.  If a unit's\n"
-         "shell offers neither, the console procedure in the repository README is\n"
-         "the way in, and this tool is not.")
+         "Log in as config and get a root shell; nothing is written by this.",
+         "The AP must be on its factory firmware, powered and reachable. If it already\nruns OpenWrt, use --installer-at <its address>.")
     kind, shell, card = connect(a.host, a.user, a.password)
     if not field_install(card["model"]):
         refuse_unsupported(card["model"])
@@ -2414,11 +2454,8 @@ def main():
 
     if kind == "stock":
         step("Verify the AP",
-             "Check the model, firmware version, flash layout and the U-Boot\n"
-             "variables the fallback needs, before changing anything.",
-             "This AP does not match what this tool knows (layout, size, or a\n"
-             "missing boot variable).  Nothing was written.  Keep the log and\n"
-             "report it; do not force an install on an unexpected layout.")
+         "Check the model, firmware, flash layout and the boot variables the fallback needs.",
+         "This AP does not match what the tool knows, so it stopped rather than guess.\nNothing was written; send the log.")
         verify_stock(shell, card)
         if a.verify_only:
             m.say("")
@@ -2427,11 +2464,8 @@ def main():
             return
         if not a.restore:
             step("Download this AP's own firmware",
-                 "An AP in the wild may be the only copy of its firmware.  Every\n"
-                 "partition is read, gzipped on the AP, posted to this PC, and\n"
-                 "checked against the AP's own hash of the same flash.",
-                 "Free space on this PC, and let TCP 8069 in from the AP.  The AP\n"
-                 "is unchanged and still on its own firmware; nothing was written.")
+         "Read every partition off the AP and check it here, before anything changes.",
+         "Free space on this PC, and allow TCP 8069 in from the AP. The AP is unchanged.")
             reused = None
             if a.skip_download:
                 m.say("")
@@ -2465,8 +2499,8 @@ def main():
 
     # ---- the choice --------------------------------------------------------
     step("Choose what to do with this AP",
-         "The firmware is safe on this PC either way.",
-         "Nothing is written unless you choose 1 or 2.")
+         "The firmware is saved either way.",
+         "Nothing is written unless you choose install or revert.")
     action = None
     if a.backup_only:
         action = "stop"
@@ -2519,12 +2553,8 @@ def main():
 
     # ---- netboot the installer --------------------------------------------
     step("Boot the RAM installer",
-         "One U-Boot environment write makes the AP fetch a RAM-only installer\n"
-         "over TFTP.  Arista's own boot stays the last step of the same value,\n"
-         "so if the fetch fails the AP boots its own firmware as usual.",
-         "Check UDP 69 is free on this PC and that the AP's gateway is the one\n"
-         "printed above.  If the netboot fails the AP boots its own firmware; a\n"
-         "second run costs nothing.")
+         "One boot-command change fetches a RAM-only installer, with Arista kept as the fallback.",
+         "Check UDP 69 is free here. If the fetch fails the AP boots its own firmware;\njust run the tool again.")
     boot_installer(run, card, pc_ip, ap_ip, itb, kind)
     # The installer comes up on the AP's own segment, not on this PC's: ask the
     # operator for its address, and only scan the AP's /24 as a fallback.
@@ -2539,19 +2569,13 @@ def main():
 
     if action == "install":
         step("Install OpenWrt",
-             "Push factory.ubi to the RAM installer over SSH, let its own checks\n"
-             "run, then it writes ONE environment variable and NAND slot 0.\n"
-             "Slot 1 stays as Arista's fallback.",
-             "The installer refuses rather than write a half-checked image, and the\n"
-             "AP's own firmware is still on this PC.  A failed install leaves the\n"
-             "AP booting its own firmware; run again when the cause is fixed.")
+         "Send the image, let the installer check it, then write slot 0.",
+         "The installer refuses rather than write a half-checked image, and this AP\nstill boots its own firmware.")
         do_install(run, card, ip, ubi, sums)
     else:
         step("Put this AP's own firmware back",
-             "Write the saved slot 0 image and the U-Boot environment back from\n"
-             "the backup just verified, over the RAM installer.",
-             "Slot 1 and the other NOR partitions are left as found.  If the write\n"
-             "fails the AP still boots its own firmware; nothing else was touched.")
+         "Write the saved slot 0 and boot environment back.",
+         "Slot 1 and the other NOR partitions are left as found; the AP still boots\nits own firmware if this fails.")
         do_restore(run, card, manifest, backup_dir)
 
     # ---- report ------------------------------------------------------------
@@ -2578,7 +2602,7 @@ def main():
             m.say("  Wi-Fi is off and there is no root password until you set one")
         else:
             m.say("  it will appear on Arista's firmware, at its usual address")
-        m.say("  (add --verify to have this tool wait for it and check instead)")
+        m.say("  Add --verify if you want the tool to wait for it and check.")
 
     m.say("")
     if backup_dir:

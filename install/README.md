@@ -68,6 +68,9 @@ python arista-field.py --installer-at 192.168.1.17 --yes --yes-install
 # Wait for the AP afterwards and check it, instead of leaving that to you
 python arista-field.py --host 192.168.1.191 --install --verify
 
+# More detail on screen: why each step does what it does
+python arista-field.py --host 192.168.1.191 --install --verbose
+
 # What each release carries, and which one this tool would take (no AP needed)
 python arista-field.py --list-releases
 python arista-field.py --host 192.168.1.191 --channel testing   # include pre-releases
