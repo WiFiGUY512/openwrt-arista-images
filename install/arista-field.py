@@ -58,7 +58,14 @@ INDEX = "index.json"
 #   1.1  Arista firmware 16.x: read the model from 'show device info' when
 #        'version' is gone, and accept the 16.x "Continue?/Confirm? [y]/n:"
 #        prompt wording as well as 11.x's "([y]/n)" (2026-11-04).
-TOOL_VERSION = "1.1"
+#   1.2  16.x's 'upgrade' dialogue is a different shape, not just different
+#        wording: it asks for the server/host before "Continue?" (11.x asks
+#        Continue? first, then two optional build sub-prompts, then the
+#        server address), and has no separate "Confirm?" after.  The tool
+#        now waits for whichever leading prompt shows up first and drives
+#        the rest from that, instead of assuming 11.x's order (2026-11-04,
+#        from a hand-run transcript on a C-260, build 16.1.0-51.6).
+TOOL_VERSION = "1.2"
 
 # ---------------------------------------------------------------------------
 # Helpers carried in this file on purpose: a field installer has to be ONE
@@ -969,23 +976,47 @@ def _connect_once(host, user=None, password=None):
             break
     m.say("  This AP is an Arista %s, firmware %s." % (MODELS[model]["name"], fw or "?"))
     pty.send("upgrade")
-    # Prompt punctuation varies by build: 11.x asks "Continue? ([y]/n)", 16.x
-    # "Continue? [y]/n:".  Match either -- optional parens, flexible spacing.
-    if not pty.wait(r"Continue\?\s*\(?\[y\]/n\)?", 30):
-        m.die("'upgrade' did not offer to continue: offline mode, or another build.")
-    pty.send("y")
-    pty.wait(r"Enter upgrade build version string", 30)
-    pty.send("1")
-    pty.wait(r"Enter upgrade build vendor version", 30)
-    pty.send("1")
-    if not pty.wait(r"Server IP Address or Upgrade path", 30):
-        m.die("the upgrade flow did not ask for a server address the usual way;\n"
-              "run 'upgrade' by hand once and send the full prompt sequence so the\n"
-              "tool can be matched to this build.")
-    pty.send("http://%s/;sh</dev/tty>/dev/tty;" % host)
-    if not pty.wait(r"Confirm\?\s*\(?\[y\]/n\)?", 90):
-        m.die("no confirm prompt:\n%s" % pty.since(0).strip()[-800:])
-    pty.send("y")
+    # The prompt order differs by build, not just its punctuation: 11.x asks
+    # "Continue?" first, then (on some builds) two build-version sub-prompts,
+    # then the server address ("Server IP Address or Upgrade path"), then a
+    # final "Confirm?".  16.x asks the server address first -- worded
+    # "Upgrade from Server/Host []" -- then "Continue?", with no sub-prompts
+    # and no separate "Confirm?" after it (read from a hand-run transcript on
+    # a C-260, build 16.1.0-51.6, 2026-11-04).  Wait for whichever of the two
+    # leading prompts shows up first and drive the rest from there.
+    server_pat = r"(?:Server IP Address or Upgrade path|Upgrade from Server/Host)"
+    continue_pat = r"Continue\?\s*\(?\[y\]/n\)?"
+    confirm_pat = r"Confirm\?\s*\(?\[y\]/n\)?"
+    payload = "http://%s/;sh</dev/tty>/dev/tty;" % host
+    mk1 = pty.mark()
+    first = pty.wait("(?:%s)|(?:%s)" % (server_pat, continue_pat), 30, mark=mk1)
+    if not first:
+        m.die("'upgrade' offered neither a server prompt nor Continue?: offline mode, or another build.")
+    if re.search(server_pat, first.group(0)):
+        # 16.x order: the server/host field is asked before Continue?.
+        pty.send(payload)
+        if not pty.wait(continue_pat, 30):
+            m.die("no Continue? prompt after the server address:\n%s" % pty.since(0).strip()[-800:])
+        pty.send("y")
+    else:
+        # 11.x order: Continue? first, then the optional build sub-prompts,
+        # then the server address.
+        pty.send("y")
+        for sub_pat in (r"Enter upgrade build version string",
+                        r"Enter upgrade build vendor version"):
+            mk2 = pty.mark()
+            if pty.wait(sub_pat, 30, mark=mk2):
+                pty.send("1")
+        if not pty.wait(server_pat, 30):
+            m.die("the upgrade flow did not ask for a server address the usual way;\n"
+                  "run 'upgrade' by hand once and send the full prompt sequence so the\n"
+                  "tool can be matched to this build.")
+        pty.send(payload)
+    # Confirm? follows the server address on 11.x; 16.x has none observed, so
+    # this is optional -- only answer it if it actually appears.
+    mk3 = pty.mark()
+    if pty.wait(confirm_pat, 90, mark=mk3):
+        pty.send("y")
     time.sleep(10)
     out, rc = pty.run("id", 120)
     if "uid=0" not in out:
