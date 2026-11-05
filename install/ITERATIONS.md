@@ -32,6 +32,7 @@ unit, not a tidy-up. The commit ids are in the public repo
 | 22 | two bugs found by that review | `download_firmware()` called `ensure_shell(run, ...)` with no `run` in scope -- any run taking a fresh backup died with NameError; and offline caching took `sorted(cands)[-1]`, i.e. tag *text*, which puts `-9-` after `-42-`. Both fixed |
 | 23 | version-agnostic model detect and prompts (**tool 1.1**; `--version` added) | a C-260 on firmware 16.1.0-51.6 (not the 11.0.1-49 the tool was read on) answered `version` with "Invalid command", and its `upgrade` dialogue asks "Continue? [y]/n:" / "Confirm? [y]/n:" instead of 11.x's "([y]/n)". Fall back to `show device info` when `version` names no model; parse the colon firmware form; make the Continue/Confirm matchers accept optional parens. The upgrade script itself is unchanged across the two builds, so only the wording needed loosening |
 | 24 | `upgrade` prompt order read per build, not assumed (**tool 1.2**) | 1.1's loosened wording still died on that same C-260: a tester's run showed 16.x asks for the server/host *before* "Continue?" ("Upgrade from Server/Host []"), with no build-version/vendor sub-prompts and no later "Confirm?" -- the reverse of 11.x's order (Continue? first, then the two optional sub-prompts, then the server address, then Confirm?). Left as 1.1 had it, the tool answered Continue? with the server field still blank, and the upgrade ran empty. Now waits for whichever of the two leading prompts appears first and drives the rest from that; Confirm? is answered only if it appears |
+| 25 | root shell via `radartool`, not the `upgrade` eval (**tool 1.3**) | on a 16.1.0-51.6 C-260, `upgrade <url>` is rejected ("Invalid argument": the CLI's real grammar is `upgrade url <url>`, from `cli_commands.yaml`), and the "Upgrade from Server/Host []" line is an *echo* of the source, not a prompt -- a payload typed at it answers Continue? and starts an upgrade from nothing. The clean way in is `radartool params ;sh; radio 0`, which evals its arguments and drops to BusyBox ash (captured on a C-360 2026-10-05, confirmed on this C-260 2026-11-04, and documented for firmware 18 by Arista-AP-firmware). The tool now tries radartool first and keeps the upgrade wizard only as a fallback, its source passed as `upgrade url <url>` and believed only when the echo line shows our host |
 
 ## What is proven, and on what
 
@@ -46,11 +47,10 @@ unit, not a tidy-up. The commit ids are in the public repo
   takes `--no-backup`), resumed with `--installer-at` after an interrupted run.
 - **Not yet:** a C-360 on a real unit; a unit whose factory password was
   changed (the `--user/--password` route is untested on hardware); and a full
-  install on firmware 16.x end to end -- the model-detect, prompt wording and
-  now the prompt *order* are all read from a real 16.x transcript (tool 1.2),
-  but no run has yet gotten past the server-address step on 16.x hardware to
-  confirm the injection still lands a root shell and the rest of the install
-  proceeds. A 16.x C-260 completing `--backup-only` is the next confirmation.
+  install on firmware 16.x end to end.  The 16.x root shell is now confirmed --
+  `radartool params ;sh; radio 0` dropped a C-260 at 16.1.0-51.6 to BusyBox ash
+  (2026-11-04) -- but a 16.x unit has not yet completed `--backup-only` and the
+  install after it.  That is the next confirmation.
 
 ## Deliberate design points (do not "simplify" these away)
 

