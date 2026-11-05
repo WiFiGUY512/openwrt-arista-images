@@ -932,11 +932,26 @@ def root_via_radartool(pty):
     by Arista-AP-firmware.  The ash banner is the proof the break-out worked,
     so nothing else is typed unless it appears.  Returns True with the pty
     sitting at the ash prompt, False with the config shell still on top.
+
+    This is tried first on every model: it is a documented command rather than
+    an eval in a download path.  Of the units seen so far only the C-230
+    (8.9.0-63.1) has no radartool in its CLI -- it answers "Invalid command",
+    which is caught here and falls straight through to the upgrade wizard.
     """
     say("  asking radartool for a shell (its arguments are evaluated).")
     mk = pty.mark()
     pty.send("radartool params ;sh; radio 0")
-    if not pty.wait(r"built-in shell \(ash\)", 30, mark=mk):
+    # Either the ash banner, or the CLI refusing the command outright -- which is
+    # what a build without radartool does, and what the C-230 (8.9.0) does.  The
+    # refusal is instant, so there is no reason to sit out the whole timeout
+    # before falling back to the upgrade wizard.
+    got = pty.wait(r"(built-in shell \(ash\))|(Invalid command)|(not found)|"
+                   r"(Invalid argument)|(Usage:)|(usage:)", 30, mark=mk)
+    if not got:
+        return False
+    if "ash" not in got.group(0):
+        say("  no radartool here (%s); using Arista's upgrade wizard instead."
+            % got.group(0).strip()[:40])
         return False
     mk2 = pty.mark()
     pty.send("id")
@@ -1136,6 +1151,7 @@ def _connect_once(host, user=None, password=None):
         mk0 = pty.mark()
         upgrade_root_shell(pty, host, payload)
         time.sleep(10)
+        say("  root shell via Arista's upgrade wizard.")
         said = pty.since(mk0)
         if "Upgrade has started" in said:
             m.die("Arista started an upgrade from a source it never read: the injected\n"

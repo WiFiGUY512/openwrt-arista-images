@@ -112,7 +112,7 @@ Each write is announced as it happens and totalled at the end.
 ## How it gets code in
 
 ```
-stock firmware --SSH(config shell + prep_upgrade eval)--> root shell
+stock firmware --SSH(config shell + its own radartool)--> root shell
 root shell --gzip|curl POST--> this PC          backup of every partition
 root shell --1 env write, reboot-->
 U-Boot  --TFTP--> RAM installer (23 MB, ~30 s)
@@ -222,7 +222,10 @@ Notes that matter for the C-260:
   the typed line, `do_upgrade.sh:179` reads the server address/path unfiltered,
   `do_upgrade.sh:424` passes it to `prep_upgrade.sh` as argument 8, and
   `prep_upgrade.sh:373` evals it. That build's `do_upgrade.sh` has no
-  `/tmp/offline` guard, so that C-230 failure mode does not exist on it. Its
+  `/tmp/offline` guard, so that C-230 failure mode does not exist on it. (The
+  tool prefers the CLI's `radartool` command, which is not an eval at all; the
+  wizard above is the fallback, and the only unit seen without radartool is the
+  C-230 at 8.9.0.) Its
   `version` command prints what this tool parses (`The device model is C-260.`,
   `Device Build: [...]`), so the model is read, not asked for.
 - **Status.** Proven on a C-260 (Arista 11.0.1-49.8): backup, install and
