@@ -34,6 +34,7 @@ import gzip
 import hashlib
 import importlib.util
 import json
+import logging
 import os
 import re
 import secrets
@@ -166,6 +167,12 @@ class Pty:
         if rc != 0:
             die("%s failed (exit %d): %s\n%s" % (what or "a command on the AP", rc, cmd, out[-800:]))
         return out
+
+
+# Paramiko logs a full traceback for every host that accepts TCP and then does
+# not answer with an SSH banner -- normal while a scan walks a /24 and an AP is
+# still booting.  Keep it off the screen; the failures themselves are handled.
+logging.getLogger("paramiko").setLevel(logging.CRITICAL)
 
 
 def ssh_open(host, user, password, timeout=15, tries=1, delay=2):
@@ -2558,7 +2565,11 @@ def main():
         m.say("  (add --verify to have this tool wait for it and check instead)")
 
     m.say("")
-    m.say("The AP's firmware as found: %s" % backup_dir)
+    if backup_dir:
+        m.say("The AP's firmware as found: %s" % backup_dir)
+    else:
+        m.say("No firmware was saved: this AP was already on OpenWrt, so it had no")
+        m.say("factory firmware to read. Its previous image is replaced by this install.")
     m.say("Environment writes this run: %d  (%s)"
           % (len(run.env_writes), ", ".join(run.env_writes) or "none"))
     m.say("Flash writes this run:      %d  (%s)"
