@@ -75,7 +75,7 @@ page or with `sysupgrade`, or run this tool again and it offers the update.
 |---|---|---|
 | C-230 | yes | installed and put back to Arista on a unit, twice each |
 | C-260 | yes | installed and put back on a unit (Arista 11.0.1); the way in is confirmed on 16.1.0 |
-| C-360 | yes, not yet run on a unit | the tool says so before it asks; its numbers are the C-360's own |
+| C-360 | yes | installed on a unit (Arista 20.0.0); putting Arista back with the tool has not been run on one yet |
 | C-460 | yes | installed and put back on a unit (Arista 18.2.0), once its first build is published |
 | W-318, W-118, C-200 | not yet | no confirmed way into Arista's firmware on these; install them [by hand](BY-HAND.md), with a console cable |
 

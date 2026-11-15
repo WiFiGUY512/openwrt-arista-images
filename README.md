@@ -28,8 +28,7 @@ what you will see, what it needs, and what to do if it stops.
 
 | Model | Installs over the network |
 |---|---|
-| C-230, C-260 | yes |
-| C-360 | yes; not yet run on a unit, and the installer says so |
+| C-230, C-260, C-360 | yes |
 | C-460 | yes, from its first published build |
 | W-318, W-118, C-200 | not yet: [by hand](install/BY-HAND.md), with a console cable |
 

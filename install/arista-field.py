@@ -767,8 +767,11 @@ def log_path():
     return getattr(LOG, "path", None)
 
 
-def die(msg):
-    """Stop, in plain words: what happened, what to do, and what was written."""
+def die(msg, hint=None):
+    """Stop, in plain words: what happened, what to do, and what was written.
+    hint replaces the running step's own advice where that would mislead."""
+    if hint is not None:
+        STEP["hint"] = hint
     lines = [l.strip() for l in str(msg).strip().splitlines() if l.strip()]
     tell("")
     tell("Couldn't continue: %s" % (lines[0] if lines else "unknown problem"))
@@ -799,6 +802,10 @@ def die(msg):
         LOG.write("\n    FULL: %s\n" % str(msg))
     if log_path():
         tell("   Full detail: %s" % log_path())
+    try:
+        _cleanup_stock()        # while the session to the AP is still open
+    except Exception:
+        pass
     sys.exit(1)
 
 
@@ -873,9 +880,9 @@ MODELS = {
         "fit_cfg": "config@hk09",
         "load_addr": "0xA0000000",
         "installer": "arista-c360-install",
-        # Shown once, before the question: the C-360's numbers are its own and
-        # checked against a unit's flash, but nobody has run this path on one.
-        "unproven": "this tool has not yet been run on a C-360 from start to finish.",
+        # Installed on a unit with this tool, 2026-11-15 (Arista 20.0.0-179,
+        # running from slot 1).  Its way back to Arista by this tool has not
+        # been run on one; "unproven" is the key for a note before the question.
         "slot0": ("rootfs", "ubi"),
         "slot1": ("rootfs_1",),
         "appsblenv": ("0:APPSBLENV", "0:appsblenv"),
@@ -1634,23 +1641,43 @@ def pty_clean(pty, host, wait=True):
     m.say("The AP restarts now. Arista's prep_upgrade.sh does that by itself when")
     m.say("the injected shell closes; doing it here just makes it predictable.")
     try:
+        if pty.chan.closed or not pty.chan.get_transport().is_active():
+            return False
+    except AttributeError:
+        pass                                # a stand-in shell (the tests)
+    except Exception:
+        return False
+    try:
         pty.send("sync; /sbin/reboot")
     except Exception:
-        return
+        return False
     global _REBOOTED
     _REBOOTED = True
     if not wait:
-        return
+        # Hold the session until the AP has taken the command: the shell dies
+        # with the session, and a restart typed as it closed was lost (C-360,
+        # 2026-11-15: after a stopped run the AP stayed up, in whatever state
+        # the stopped step left it).  The AP dropping the connection is the sign.
+        end = time.time() + 20
+        while time.time() < end:
+            time.sleep(1)
+            try:
+                if pty.chan.closed or not pty.chan.get_transport().is_active():
+                    break
+            except Exception:
+                break
+        return True
     time.sleep(25)
     end = time.time() + 300
     while time.time() < end:
         try:
             socket.create_connection((host, 22), 3).close()
             m.say("  back at %s." % host)
-            return
+            return True
         except Exception:
             time.sleep(5)
     m.say("  it has not answered yet; it will come back on its own.")
+    return True
 
 
 # Whatever way this program ends -- including a refused check in the middle --
@@ -1663,15 +1690,25 @@ _STOCK_HOST = None
 def _cleanup_stock():
     """If we stop early (a refused check, Ctrl-C), still leave the AP in a
     defined state rather than with the upgrade service half-run."""
+    global _STOCK
     if _STOCK is not None and not _REBOOTED:
         # Send the restart and go: waiting for the AP here would leave the
         # screen silent for minutes after the run has already said it stopped.
+        # die() and the Ctrl-C ending call this themselves, while the session
+        # is still open: left to interpreter exit it ran after the SSH library
+        # had closed every session, sent nothing, and still said the AP was
+        # restarting (C-360, 2026-11-15).  Say only what happened.
+        shell, _STOCK = _STOCK, None
         try:
+            sent = pty_clean(shell, _STOCK_HOST, wait=False)
+        except Exception:
+            sent = False
+        if sent:
             tell("   The AP restarts on its own firmware now, as Arista's does when this")
             tell("   kind of session ends.  Give it two or three minutes.")
-            pty_clean(_STOCK, _STOCK_HOST, wait=False)
-        except Exception:
-            pass
+        else:
+            tell("   Restart the AP before running the tool again: unplug it for ten")
+            tell("   seconds, then give it two or three minutes.")
 
 
 atexit.register(_cleanup_stock)
@@ -1683,8 +1720,18 @@ NAND_ERASE = 0x20000          # 128 KiB PEBs; NOR partitions are 64 KiB
 
 
 def is_ubi_volume(part):
-    """The pseudo-MTD devices a running system creates for UBI volumes."""
-    return part["name"] in ("ubi_rootfs", "rootfs_data")
+    """The pseudo-MTD devices a running system creates for UBI volumes.
+
+    They are not partitions: each is a view into a slot that is saved whole.
+    By name where known, and by erase size for the rest: a volume's is the
+    slot's block less two pages (0x3e000, 0x1f000), never a power of two as a
+    real partition's is.  A C-360 lists four of them (ubi_rootfs, rootfs_data,
+    rootfs_sig, ubi_logging), and its ubi_logging cannot even be opened while
+    Arista has it mounted, which stopped a run at the backup (2026-11-15)."""
+    if part["name"] in ("ubi_rootfs", "rootfs_data", "rootfs_sig", "ubi_logging"):
+        return True
+    erase = part.get("erase") or 0
+    return part.get("kind") != "emmc" and erase > 0 and erase & (erase - 1) != 0
 
 
 def mtd_table(text):
@@ -1827,6 +1874,33 @@ def backup_rows(card, include_slot1=True):
     return out
 
 
+def live_partitions(pty, card):
+    """The flash partitions the running firmware has open for writing.
+
+    Arista keeps its settings in a UBIFS volume inside the slot it booted from
+    (and its logs in another partition), and writes to them all the time.  Two
+    reads of such a partition need not agree, so it cannot be checked the way
+    the others are: read once on the AP for a hash, read again to send.  Found
+    on a C-360, 2026-11-15, the first time this ran on one: its slot 1 changed
+    between the two reads and the run stopped.  Three sources, any of which is
+    enough: the kernel's list of attached UBI devices, the slot named on the
+    kernel command line, and the slot `pri` names."""
+    live = set()
+    out, _ = pty.run("cat /sys/class/ubi/ubi*/mtd_num 2>/dev/null", 20)
+    for n in re.findall(r"^\s*(\d+)\s*$", out, re.M):
+        live.add("mtd%s" % n)
+    out, _ = pty.run("cat /proc/cmdline", 20)
+    for name in re.findall(r"ubi\.mtd=([^\s,]+)", out):
+        r = next((x for x in card["mtd"] if x["name"] == name or x["dev"] == name
+                  or x["dev"] == "mtd%s" % name), None)
+        if r:
+            live.add(r["dev"])
+    slot = {"0": card.get("slot0"), "1": card.get("slot1")}.get(str(card.get("pri")))
+    if slot:
+        live.add(slot["dev"])
+    return live
+
+
 def verify_stock(pty, card):
     """Everything that must be true before we change anything."""
     m.say("")
@@ -1910,6 +1984,10 @@ def verify_stock(pty, card):
               "so it stopped rather than guess.  Nothing was written.\n"
               + "\n".join("- " + p for p in problems))
     card["slot0"], card["slot1"], card["env_dev"] = s0, s1, env
+    card["live"] = live_partitions(pty, card)
+    if card["live"]:
+        m.say("  in use     %s (the running firmware writes to it; saved as read)"
+              % ", ".join(sorted(card["live"])))
     m.say("  layout ok  (slot 0 %s %d MiB, slot 1 %s, env %s, %s)"
           % (s0["dev"], s0["size"] // 1048576, s1["dev"], env["dev"],
              card["version"]))
@@ -2073,30 +2151,55 @@ def download_firmware(run, pty, card, outdir, include_slot1=True, pc_ip=None, po
         safe = re.sub(r"[^A-Za-z0-9._-]", "_", r["name"])
         fname = "%s_%s.bin.gz" % (r["dev"], safe)
         gz = os.path.join(outdir, fname)
-        out = pty.must("md5sum /dev/%s | cut -d' ' -f1" % r["dev"], 900, "md5 on the AP")
-        ap_md5 = out.strip().splitlines()[-1] if out.strip() else None
-        if not ap_md5:
-            m.die("%s (%s) could not be hashed on the AP" % (r["dev"], r["name"]))
+        # A partition the running firmware writes to is read once and kept as
+        # read: gzip's own checksum covers the trip, and a second read of it on
+        # the AP would not agree anyway (live_partitions).
+        live = r["dev"] in card.get("live", ())
         t0 = time.time()
         cmd = ("gzip -1 -c /dev/%s | curl -s -S --data-binary @- "
                "http://%s:%d/put/%s" % (r["dev"], pc_ip, port, fname))
-        with Heartbeat("%s %s (%.0f MiB)" % (r["dev"], r["name"], r["size"] / 1048576.0), 12):
-            pty.run(cmd, 1800)
-        if fname not in recv.got:
-            m.die("%s (%s) did not arrive; the AP could not reach this PC "
-                  "(firewall on TCP %d?)" % (r["dev"], r["name"], port))
-        got = recv.got[fname]
-        raw = gz + ".raw"
-        sha, md5 = gunzip_sha_md5(gz, raw)
-        os.remove(raw)
-        if md5 != ap_md5:
-            m.die("%s (%s): this copy does not match the AP's own md5 "
-                  "(AP %s, here %s)" % (r["dev"], r["name"], ap_md5, md5))
-        m.say("  %-9s %-14s %6.1f MiB -> %5.1f MiB gz, verified (%.1f s)"
+        for attempt in (1, 2):
+            ap_md5 = None
+            if not live:
+                out = pty.must("md5sum /dev/%s | cut -d' ' -f1" % r["dev"], 900, "md5 on the AP")
+                ap_md5 = out.strip().splitlines()[-1].strip() if out.strip() else ""
+                if not re.fullmatch(r"[0-9a-f]{32}", ap_md5):
+                    m.die("the AP could not read its own %s (%s):\n%s"
+                          % (r["dev"], r["name"], out.strip()[-300:] or "(no answer)"),
+                          hint="Restart the AP and run the tool again.  If the same part fails again,\n"
+                               "stop there and keep the log.\nThe AP is unchanged.")
+            recv.got.pop(fname, None)
+            with Heartbeat("%s %s (%.0f MiB)" % (r["dev"], r["name"], r["size"] / 1048576.0), 12):
+                sent, _ = pty.run(cmd, 1800)
+            if fname not in recv.got:
+                if re.search(r"can't open|No such|busy|Input/output", sent):
+                    m.die("the AP could not read its own %s (%s):\n%s"
+                          % (r["dev"], r["name"], sent.strip()[-300:]),
+                          hint="Restart the AP and run the tool again.  If the same part fails again,\n"
+                               "stop there and keep the log.\nThe AP is unchanged.")
+                m.die("%s (%s) did not arrive; the AP could not reach this PC "
+                      "(firewall on TCP %d?)\n%s" % (r["dev"], r["name"], port, sent.strip()[-300:]))
+            got = recv.got[fname]
+            raw = gz + ".raw"
+            sha, md5 = gunzip_sha_md5(gz, raw)
+            os.remove(raw)
+            if live or md5 == ap_md5:
+                break
+            if attempt == 1:
+                m.say("  %-9s %-14s read twice and the two differ (AP %s, here %s); once more."
+                      % (r["dev"], r["name"], ap_md5, md5))
+                continue
+            m.die("the copy of %s (%s) does not match what the AP reads from its own flash, "
+                  "twice over (AP %s, here %s)." % (r["dev"], r["name"], ap_md5, md5),
+                  hint="Run the tool again.  If the same part fails again, this AP's flash may be\n"
+                       "failing: stop there and keep the log.\nThe AP is unchanged.")
+        m.say("  %-9s %-14s %6.1f MiB -> %5.1f MiB gz, %s (%.1f s)"
               % (r["dev"], r["name"], r["size"] / 1048576.0, got["size"] / 1048576.0,
-                 time.time() - t0))
+                 "saved as read (in use)" if live else "verified", time.time() - t0))
         entry = {"dev": r["dev"], "name": r["name"], "size": r["size"],
                  "erase": r["erase"], "file": fname, "sha256": sha, "md5": md5}
+        if live:
+            entry["live"] = True
         if r.get("kind") == "emmc":
             entry.update({"kind": "emmc", "num": r["num"], "start": r["start"],
                           "blocks": r["blocks"]})
@@ -4729,8 +4832,11 @@ def main():
                 with Heartbeat("Saving the firmware"):
                     manifest = download_firmware(run, shell, card, backup_dir,
                                                  include_slot1=not a.fast, pc_ip=pc_ip)
-            tell("     %d partitions, each checked against the AP's own hash%s"
-                 % (len(manifest["partitions"]), " (saved earlier)" if reused else ""))
+            in_use = sum(1 for p in manifest["partitions"] if p.get("live"))
+            tell("     %d partitions, each checked against the AP's own hash%s%s"
+                 % (len(manifest["partitions"]), " (saved earlier)" if reused else "",
+                    "" if not in_use else
+                    ";\n     %d in use by the running firmware, kept as read" % in_use))
             tell("     kept in %s" % backup_dir)
             if action == "backup":
                 pty_clean(shell, host, wait=False)
@@ -4867,6 +4973,10 @@ def run_main():
             tell("   Nothing was written to the AP.")
         if log_path():
             tell("   Full detail: %s" % log_path())
+        try:
+            _cleanup_stock()    # while the session to the AP is still open
+        except Exception:
+            pass
         sys.exit(130)
     except Exception as e:                            # noqa: BLE001
         import traceback

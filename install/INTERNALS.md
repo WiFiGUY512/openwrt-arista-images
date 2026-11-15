@@ -21,7 +21,7 @@ nobody has to sit and wait for a prompt; the order of the work is unchanged.
 | C-260 (11.0.1-49.8) | `--backup-only` (2026-10-25) | 26 partitions, ART included, each matching the AP's own hash |
 | C-260 (11.0.1-49.8) | stock → OpenWrt (2026-10-25, and again with release 42 on 2026-10-27) | installed, Arista kept in slot 1; three radios up, board data and Bluetooth keys taken from Arista's slot |
 | C-260 (11.0.1-49.8) | OpenWrt → its own firmware (2026-10-25) | slot 0 and environment read back **byte-identical**, booted Arista 11.0.1 |
-| C-360 | (none yet) | in the tool, not yet run on a unit |
+| C-360 (20.0.0-179) | stock → OpenWrt (2026-11-15, release 42, tool 2.0) | 28 partitions saved (two in use, kept as read); installed in 22 minutes, Arista kept in slot 1; four radios, the Wi-Fi 6E firmware taken from Arista's slot. Not yet: OpenWrt → its own firmware |
 | C-460 (18.2.0-32) | `--backup-only --fast` (2026-11-12); `--ramboot` by kexec, install three times, the fallback, and OpenWrt -> its own firmware twice (2026-11-13) | 29 partitions, each matching the AP's own md5; installed in about 3 minutes; U-Boot fell back to Arista in slot 1 unattended when OpenWrt's kernel was broken on purpose; slot 0 and the environment read back **byte-identical** to the backup |
 
 ## What it needs
@@ -144,8 +144,8 @@ can RAM-boot the installer by hand without writing anything.
 ## Known limits
 
 - **Models.** Install and revert with no console: the C-230, C-260 and C-460,
-  each proven on a real unit, and the C-360 (in the tool, not yet run on a
-  unit). The W-318, W-118 and C-200 are identified, updated when they already
+  each proven on a real unit, and the C-360 (installed on a unit; its revert
+  not yet run on one). The W-318, W-118 and C-200 are identified, updated when they already
   run OpenWrt, and their images fetched and verified, but their first install
   is by console ([BY-HAND.md](BY-HAND.md)): a way into Arista's firmware has
   not been confirmed on a unit of any of them (on the W-118, firmware 8.7.1,

@@ -82,6 +82,29 @@ in place: nothing reaches an AP before the question is answered yes, the W-318
 is refused before any shell is tried, a busy port is caught, piped output
 carries headlines only.
 
+### 2026-11-15, afternoon -- the first C-360, and what it found
+
+A C-360 (Arista 20.0.0-179, running from slot 1) was installed with 2.0 on the
+third attempt. The first two stopped in the backup, before any write, and each
+showed a fault that the C-230 and C-260 had never met. `test-backup.py` (11
+checks) holds these in place.
+
+| # | change | why |
+|---|---|---|
+| 52 | a partition the running firmware writes to is saved as read | the backup hashed each partition on the AP, then read it again to send, and compared. Arista writes to the slot it runs from (its settings volume is inside it) and to LOGGING, so the two reads differed and the run stopped. `live_partitions()` finds them (the kernel's attached-UBI list, the kernel command line, `pri`); they are sent once, gzip's checksum covers the trip, and the manifest marks them `live`. Other partitions get one re-read before the run stops |
+| 53 | UBI volumes are told by block size as well as name | a C-360 lists four (`ubi_rootfs`, `rootfs_data`, `rootfs_sig`, `ubi_logging`); only two names were known, and `ubi_logging` cannot be opened while Arista has it mounted. A volume's block is the slot's less two pages, never a power of two |
+| 54 | a stopped run restarts the AP while the session is open | the restart was left to interpreter exit, which runs after the SSH library (imported later, so its exit hook runs first) has closed every session: nothing was sent, and the screen still said the AP was restarting. `die()` and the Ctrl-C ending now do it themselves, hold the session until the AP drops it, and say "restart the AP" when it could not be sent |
+| 55 | a failed read on the AP is called that | "did not arrive (firewall?)" was printed for a partition the AP could not open, and the backup step's advice (free space, firewall) for a hash mismatch. `die(msg, hint=...)` lets a failure carry its own advice |
+
+Seen and left alone:
+
+- Build 42's image does not carry the build tag in its release string, so an AP
+  just installed with it is offered "Update OpenWrt to build 42". It goes away
+  when a later build becomes the accepted one.
+- A question needs a terminal: answers piped in are refused, by design. The
+  whole run without one is `--install --yes`.
+- The test suites write their run logs into `logs/` beside real ones.
+
 ## What is proven, and on what
 
 - **C-230:** install and revert, both end to end, twice (2026-10-25).
@@ -101,10 +124,19 @@ carries headlines only.
   back identical to the backup.
 - **2.0's own changes (2026-11-15):** finding and identifying APs ran against
   eight real units (read-only); the Windows one-line installer ran end to end
-  as far as the first question. **No install, restore or update has been run
-  on a unit with 2.0 yet**: its install and restore steps are 1.3's, called in
-  the same order, and `test-guided.py` checks that order against fakes.
-- **Not yet:** a C-360 on a real unit; `--update` on a unit; a unit whose
+  as far as the first question.
+- **C-360 (20.0.0-179, running from slot 1), 2026-11-15, with 2.0:** a full
+  install with `--install --yes`, release 42: the way in by `radartool`, the
+  layout check, the backup (28 partitions, 135 MiB, two kept as read), the
+  network boot (22 MiB by TFTP in 8 s, `config@hk09` at 0xA0000000), the
+  installer's own dry run (6.5 minutes on this model) and write, and OpenWrt
+  answering 21 minutes after the start: four radios, boot command with the
+  Arista fallback, `pri=1`. Also `--verify-only`. The menu and the yes/no were
+  seen on the unit but not answered there (no terminal to type on).
+- **Not yet, with 2.0:** a restore on any unit; `--update` on a unit; an
+  install on a C-230, C-260 or C-460 (their steps are 1.3's, called in the same
+  order).
+- **Not yet:** a unit whose
   factory password was changed (the question for it is untested on hardware);
   a full install on firmware 16.x end to end (its root shell is confirmed:
   `radartool params ;sh; radio 0` dropped a C-260 at 16.1.0-51.6 to BusyBox
@@ -120,7 +152,9 @@ carries headlines only.
 - **The AP never contacts GitHub.** It has no uplink by assumption. The PC
   fetches the release, the AP fetches from the PC.
 - **Two independent reads per partition.** The AP's hash of the raw device and
-  ours of the decompressed copy, compared.
+  ours of the decompressed copy, compared. The exception is a partition the
+  running firmware writes to (item 52): two reads of it cannot agree, so it is
+  read once and marked `live` in the manifest.
 - **Nothing is written before the backup verifies.** (Until 2.0 the menu came
   after the backup; it now comes first, so nobody waits at a prompt while
   Arista's shell expires. The order of the work on the AP is the same.)
