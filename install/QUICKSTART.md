@@ -1,106 +1,17 @@
-# Quickstart: one AP, no console cable
+# Quickstart
 
-For the Arista C-230 and C-260 (both proven on real units) and the C-360.
+This page moved: the quick way is now the whole way. See
+**[README.md](README.md)**: one line to paste, on a PC on the same network as
+the AP.
 
-You need: a PC that can reach the AP over the network, Python 3, the AP
-powered and on its factory firmware, and a DHCP server on the AP's network
-(the temporary installer takes its address that way). On Windows, allow Python
-through the firewall when it asks: the AP sends its backup to this PC on TCP
-8069 and fetches the installer over TFTP (UDP 69).
-
-## 1. Get the script
-
-**Windows (PowerShell):**
+**Windows** (PowerShell):
 
 ```powershell
-curl.exe -O https://raw.githubusercontent.com/WiFiGUY512/openwrt-arista-images/main/install/arista-field.py
-python -m pip install paramiko
+irm https://raw.githubusercontent.com/WiFiGUY512/openwrt-arista-images/main/install/get.ps1 | iex
 ```
 
-**macOS / Linux:**
+**macOS or Linux:**
 
 ```sh
-curl -O https://raw.githubusercontent.com/WiFiGUY512/openwrt-arista-images/main/install/arista-field.py
-python3 -m pip install paramiko
+curl -fsSL https://raw.githubusercontent.com/WiFiGUY512/openwrt-arista-images/main/install/get.sh | sh
 ```
-
-If `python` is not found on Windows, try `py` instead of `python`.
-
-## 2. Find the AP's address
-
-It is on your DHCP server's lease list, on the label, or in your router's client
-list. Then check it answers:
-
-```sh
-ping <AP address>
-```
-
-If you are unsure which build the tool will take, ask it first — it needs no AP:
-
-```sh
-python arista-field.py --list-releases
-```
-
-By default it takes the newest **stable** build. New builds are published as
-**testing** first and become stable after a soak, so the newest build is
-usually testing: add `--channel testing` in step 4 to take it.
-[STATUS.md](../STATUS.md) lists every build and what it fixed.
-
-## 3. Save the AP's firmware first (writes nothing)
-
-```sh
-python arista-field.py --host <AP address> --backup-only
-```
-
-This reads every partition off the AP, gzips it here, and checks each one against
-the AP's own hash. It takes about four minutes and changes nothing on the AP.
-**Keep the folder it prints** — that is the only copy of that AP's firmware, and
-`--restore` is what puts it back.
-
-## 4. Then choose
-
-```sh
-python arista-field.py --host <AP address>
-```
-
-or, for the newest (testing) build:
-
-```sh
-python arista-field.py --host <AP address> --channel testing
-```
-
-```
-[1] Install OpenWrt on this AP
-[2] Put this AP's original firmware back
-[3] Nothing -- stop here
-```
-
-Pick `1`. It writes two U-Boot variables, reboots the AP into a temporary
-installer over TFTP, sends the image over SSH, and the installer writes slot 0
-after its own checks pass. Arista's system in slot 1 is kept as the fallback.
-
-When it finishes, the AP restarts on its own: look for it on your DHCP server's
-lease list (hostname `OpenWrt`, and the MAC is on the label). Add `--verify` if
-you would rather the tool wait for it and check.
-
-## If something goes wrong
-
-- **"cannot log in ... (tried root, config)"** — Arista's account is `config`,
-  factory password `config`. A used unit may have had it changed by its
-  previous owner's management: add `--user config --password <pw>`, or reset
-  the AP to factory defaults and try again. A locked or already-OpenWrt unit
-  needs `--installer-at <address>` instead.
-- **"this run needs an answer ... and there is no terminal"** — you are running
-  it from something that is not a terminal. Add `--install` (and `--yes`) or run
-  it in a normal terminal window.
-- **It cannot find the installer** — the temporary system takes an address by
-  DHCP on the AP's LAN port, so that segment needs a DHCP server.
-- **It stops anywhere** — the AP keeps its own firmware: a failed fetch puts
-  Arista's boot back and restarts it. Nothing is lost; send the log
-  (`field-run-*/run.log`) and the last screen.
-
-## Rule of thumb
-
-`--backup-only` first, always. The tool refuses to write before the backup
-verifies, but the backup is also what you would need if anything later goes
-wrong on a unit that has no other copy of its firmware.
