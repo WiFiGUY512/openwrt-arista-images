@@ -144,6 +144,15 @@ model in the table installs over the network.
 | 65 | the C-200's path | 11.0.0 has no `radartool`; the upgrade wizard is the way in (`root_order`). Its flash is the C-230's scheme with its NOR kernels under the names `HL_backup0/1`, and `fdt_high` is left at Arista's own. Its image carries no installer script, so the tool makes the steps (`install_by: ubiformat`): it checks from the RAM installer that slot 1 holds a UBI and its kernel partition an image, writes the boot command first (OpenWrt, then Arista in slot 1), formats slot 0 with the factory image, and reads the `kernel` and `rootfs` volumes back against the release's install sums |
 | 66 | a NOR partition mounted for writing is saved as read | Arista keeps CONFIG as jffs2, mounted read-write; like the running slot, two reads of it need not agree |
 
+The same night the published one-line installer (`get.ps1` from GitHub, with
+`--host ... --install --yes`) installed the W-318, on its third run. The first
+two stopped before any write, and each is worth a line:
+
+| # | change | why |
+|---|---|---|
+| 67 | the PC's address is the one on the AP's own network | the address was taken from the system's route towards the AP. A VPN on the PC came up during a run and took that route; the AP was told to post its backup to the VPN's address and could not reach it. An address of the PC on the AP's /24 is now preferred, and the failure names the address used and `--pc-ip` |
+| 68 | FAILSAFE, and addresses, in the guide | a W-318 on 18.0.0 went into Arista's failsafe mode after an evening of warm restarts (six power cuts had not done it); the tool's check stopped the run, and `failsafe recover` + `y` in the AP's CLI took it out. The guide's table now says so, and that an AP's address can change across an install (Arista's firmware asks DHCP by plain MAC, OpenWrt by an RFC 4361 client id) |
+
 Seen and left alone: `test_releases.py` writes its made-up `index.json` and
 `release.json` (and, once, made-up images) into the real release cache when a
 check gets as far as a fetch. The tool verifies every file against the

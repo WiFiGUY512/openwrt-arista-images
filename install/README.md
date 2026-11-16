@@ -128,9 +128,11 @@ nothing.
 | It says | What to do |
 |---|---|
 | No Arista access point answered | Type the AP's address when asked. It is on your router's list of clients. The AP needs two or three minutes after power-on. |
-| The default login was refused | The AP's password was changed. Type it when asked, or reset the AP to factory defaults. |
+| The default login was refused | The AP's password was changed. Type it when asked, or reset the AP to factory defaults with its reset button; turning its power off and on does not do it. |
+| The AP is in Arista's FAILSAFE mode | Arista's firmware puts itself there after several restarts in a short time. Log in to the AP (`ssh config@<address>`, password `config`), type `failsafe recover` and answer `y`; it restarts, and then run this again. |
 | Cannot open UDP 69 / TCP 8069 | Another program uses that port (a TFTP server, or a second copy of this tool); close it. On Linux, run it with `sudo` as shown. |
-| A partition did not arrive / the installer never answered | The PC's firewall is blocking the AP. Allow Python through it and run again. |
+| A partition did not arrive / the installer never answered | The PC's firewall is blocking the AP. Allow Python through it and run again. If the PC has a VPN on, turn it off for the install, or give the PC's address on the AP's network with `--pc-ip`. |
+| The AP has a different address afterwards | Expected. Arista's firmware and OpenWrt ask the router for an address in different ways, so the router may give each its own. The tool follows the AP by its MAC and prints where it is. |
 | The installer never answered, and the firewall is open | The AP's network needs a DHCP server. |
 | The AP cannot be installed over the network yet | That model installs [by hand](BY-HAND.md). |
 

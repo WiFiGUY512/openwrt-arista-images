@@ -576,12 +576,30 @@ def check_sums(d, names):
 
 
 def pc_address(towards):
+    """This PC's address as the AP will see it.
+
+    The system's route towards the AP names it -- unless a VPN on this PC has
+    just taken that route, and then the address named is the VPN's, which the
+    AP cannot reach (a run stopped at the backup that way, 2026-11-15: the AP
+    was told to post to a 100.64.x.x address).  An address of this PC on the
+    AP's own /24 is the one the AP can reach, so it is preferred when the route
+    names anything else."""
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         s.connect((towards, 9))
-        return s.getsockname()[0]
+        ip = s.getsockname()[0]
     finally:
         s.close()
+    net = towards.rsplit(".", 1)[0] + "."
+    if ip.startswith(net) or not re.fullmatch(r"\d+\.\d+\.\d+\.\d+", towards):
+        return ip
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            if info[4][0].startswith(net):
+                return info[4][0]
+    except Exception:
+        pass
+    return ip
 
 
 
@@ -2371,8 +2389,12 @@ def download_firmware(run, pty, card, outdir, include_slot1=True, pc_ip=None, po
                           % (r["dev"], r["name"], sent.strip()[-300:]),
                           hint="Restart the AP and run the tool again.  If the same part fails again,\n"
                                "stop there and keep the log.\nThe AP is unchanged.")
-                m.die("%s (%s) did not arrive; the AP could not reach this PC "
-                      "(firewall on TCP %d?)\n%s" % (r["dev"], r["name"], port, sent.strip()[-300:]))
+                m.die("%s (%s) did not arrive; the AP could not reach this PC at %s "
+                      "(firewall on TCP %d?)\n%s" % (r["dev"], r["name"], pc_ip, port, sent.strip()[-300:]),
+                      hint="Allow TCP %d in from the AP through this PC's firewall, and check there is\n"
+                           "free disk space here.  If %s is not this PC's address on the AP's network\n"
+                           "(a VPN can do that), give the right one with --pc-ip.\nThe AP is unchanged."
+                           % (port, pc_ip))
             got = recv.got[fname]
             raw = gz + ".raw"
             sha, md5 = gunzip_sha_md5(gz, raw)
