@@ -200,19 +200,75 @@ class Pty:
 logging.getLogger("paramiko").setLevel(logging.CRITICAL)
 
 
+def _old_ssh(t):
+    """Let one connection talk to the SSH server in Arista's oldest firmware.
+
+    A W-118 on 8.7.1 offers one key exchange (diffie-hellman-group1-sha1) and
+    one host key type (ssh-rsa, signed with SHA-1), and current paramiko has
+    dropped both (read on a unit, 2026-11-15: "no acceptable kex algorithm").
+    Both are a few lines on top of what paramiko still has: the group-14
+    exchange with the 1024-bit prime of RFC 2409 section 6.2 and SHA-1, and its
+    RSA key with SHA-1 allowed for the host's signature.  They are added to
+    this one connection, after the ordinary attempt has failed, and to nothing
+    else."""
+    from hashlib import sha1
+    from cryptography.hazmat.primitives import hashes
+    from paramiko import kex_group14, rsakey
+
+    class KexGroup1(kex_group14.KexGroup14SHA256):
+        P = int("FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74"
+                "020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F1437"
+                "4FE1356D6D51C245E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7ED"
+                "EE386BFB5A899FA5AE9F24117C4B1FE649286651ECE65381FFFFFFFFFFFFFFFF", 16)
+        G = 2
+        name = "diffie-hellman-group1-sha1"
+        hash_algo = sha1
+
+    class OldRSAKey(rsakey.RSAKey):
+        HASHES = dict(rsakey.RSAKey.HASHES)
+        HASHES["ssh-rsa"] = hashes.SHA1
+
+    t._kex_info = dict(t._kex_info)
+    t._kex_info[KexGroup1.name] = KexGroup1
+    t._key_info = dict(t._key_info)
+    t._key_info["ssh-rsa"] = OldRSAKey
+    t._preferred_kex = tuple(t._preferred_kex) + (KexGroup1.name,)
+    t._preferred_keys = tuple(t._preferred_keys) + ("ssh-rsa",)
+    t._preferred_ciphers = tuple(t._preferred_ciphers) + tuple(
+        c for c in ("aes128-cbc", "aes256-cbc", "3des-cbc") if c not in t._preferred_ciphers)
+    t._preferred_macs = tuple(t._preferred_macs) + tuple(
+        c for c in ("hmac-sha1",) if c not in t._preferred_macs)
+
+
+# Hosts whose SSH server needed _old_ssh, so later connections skip the failed try.
+OLD_SSH_HOSTS = set()
+
+
 def ssh_open(host, user, password, timeout=15, tries=1, delay=2):
     """An SSH client.  OpenWrt's root has no password, and dropbear accepts a
     blank one only through the "none" method -- so that is asked for by name
     rather than left to paramiko's password path."""
     import paramiko
     last = None
-    for _ in range(tries):
+    attempts = [host in OLD_SSH_HOSTS] * tries
+    while attempts:
+        old = attempts.pop(0)
         t = None
         try:
             sock = socket.create_connection((host, 22), timeout)
             t = paramiko.Transport(sock)
             t.banner_timeout = timeout
-            t.start_client(timeout=timeout)
+            if old:
+                _old_ssh(t)
+            try:
+                t.start_client(timeout=timeout)
+            except Exception as e:
+                # A server too old for this library: once more, with the old
+                # exchange added.  Anything else is the caller's to see.
+                if not old and re.search(r"no acceptable|Incompatible ssh", str(e)):
+                    OLD_SSH_HOSTS.add(host)
+                    attempts.insert(0, True)
+                raise
             if password == "":
                 t.auth_none(user)
             else:
@@ -928,12 +984,48 @@ MODELS = {
         # eMMC, with its kernel in NOR 0:HLOS: no factory.ubi.  The RAM
         # installer's arista-w318-install writes the sysupgrade image itself.
         "image": "sysupgrade",
-        # Listed and fetched; not yet installed or restored by this tool.
-        "field_install": False,
-        "manual": "RAM-boot its initramfs over TFTP from the console "
-                  "(bootm ...#config@cp01-c3), then on it run "
-                  "arista-w318-install --dry-run <sysupgrade.bin>, then again "
-                  "without --dry-run",
+        # Its flash, as read on a unit on Arista 18.0.0-176.12 (2026-11-15): 22
+        # NOR partitions adding up to 32 MiB, the two kernels among them
+        # (0:HLOS at 0x7a0000, 0:HLOS_1 at 0xfa0000), and the two systems on the
+        # eMMC.  The way in is radartool, as on the other 18.x and 20.x units.
+        "storage": "emmc",
+        "emmc_disk": "mmcblk0",
+        "emmc_parts": (("rootfs", 1, 34, 262144),
+                       ("rootfs_1", 2, None, 262144),
+                       ("rootfs_data", 3, None, 524288),
+                       ("rootfs_data_1", 4, None, 524288)),
+        "slot0_parts": ("rootfs", "rootfs_data"),
+        "slot1_parts": ("rootfs_1", "rootfs_data_1"),
+        "overlay_part": "rootfs_data",
+        "appsblenv": ("0:APPSBLENV", "0:appsblenv"),
+        "need_nor": ("0:HLOS_1", "0:hlos_1"),
+        "need_env": ("bootcmd", "ubootscriptv2", "ubootscript", "pri"),
+        "nor_total": 32 * 1024 * 1024,
+        # Arista's own boot command, exactly (fw_printenv on the unit).  It holds
+        # double quotes, so the netboot puts it back inside single ones.
+        "stock_bootcmd": 'env default default_env_version; if test -n "${default_env_version}"; '
+                         'then run ubootscriptv2; else run ubootscript; fi;',
+        "fit_cfg": "config@cp01-c3",
+        "fdt_high": None,
+        # Its uplink is a 2.5 G port: several short fetch attempts, each its own
+        # variable so no line pasted into Arista's shell is long.
+        "net_helper": True,
+        "net_tries": 4,
+        # The install is the image's own script, which checks this unit (its
+        # layout, its calibration, and that slot 1 holds an Arista system with
+        # the Wi-Fi firmware OpenWrt's first boot copies) and writes one
+        # fw_setenv, the eMMC "rootfs" and NOR 0:HLOS.
+        "installer": "arista-w318-install",
+        "install_by": "script",
+        "pri_note": "Arista calls slot 0 its primary on this unit, so the system that runs now is "
+                    "the one the install replaces; the copy in slot 1 is what is kept.",
+        # Back to Arista: its kept copy in slot 1, by the boot command alone.
+        "revert": "bootcmd",
+        "revert_names": ("owrt_boot", "arista_boot"),
+        "revert_env": (("bootargs", "console=ttyMSM0,115200n8 root=/dev/mmcblk0p2 rootwait rw"),
+                       ("pri", "1"), ("sr", "0")),
+        "revert_note": ("Arista's firmware starts again from its second slot, where the install",
+                        "left it.  OpenWrt stays in the first slot, no longer started."),
     },
     "w118": {
         "name": "W-118",
@@ -944,24 +1036,93 @@ MODELS = {
         # Installed with sysupgrade -n from the RAM installer; the release also
         # carries a factory.ubi, which that install does not use.
         "image": "sysupgrade",
-        "field_install": False,
-        "manual": "RAM-boot its initramfs over TFTP from the console "
-                  "(bootm 0x84000000), back up the flash, set the boot command "
-                  "once at the U-Boot prompt, then sysupgrade -n its sysupgrade "
-                  "image",
+        # Its flash, as read on a unit on Arista 8.7.1-03.2 (2026-11-15): two
+        # 64 MiB NAND slots that Arista owns, eleven NOR partitions adding up to
+        # 0xF80000, and an upper 128 MiB of NAND that Arista never uses.  OpenWrt
+        # goes into that upper half, so the install replaces nothing of Arista's.
+        "slot0": ("rootfs", "arista_rootfs"),
+        "slot1": ("rootfs2", "arista_rootfs2"),
+        "slot_size": 0x4000000,
+        "appsblenv": ("0:APPSBLENV", "0:appsblenv"),
+        "need_nor": ("0:HLOS1", "0:hlos1"),
+        "need_env": ("bootcmd", "ba0", "ba1", "ubootscript"),
+        "nor_total": 0xF80000,
+        "keeps_arista": True,
+        "revert": "bootcmd",
+        "revert_note": ("Arista's firmware was never removed from this model; only the boot",
+                        "command changes.  OpenWrt stays in the flash, no longer started."),
+        # 8.7.1's CLI has no radartool; its upgrade wizard is the way in (and
+        # its SSH server needs _old_ssh).
+        "root_order": ("upgrade",),
+        # U-Boot 2012.07: the image is loaded at 0x84000000 and booted with a
+        # bare bootm (one configuration, no '#config' argument), and fdt_high is
+        # left alone.
+        "fit_cfg": None,
+        "load_addr": "0x84000000",
+        "fdt_high": None,
+        # The boot command the install writes, one fw_setenv -s, from the RAM
+        # installer.  owrt_boot is the form that has booted the lab unit since
+        # 2026-10-19; the fallback puts Arista's own partition table and
+        # arguments back first, so a failed OpenWrt boot cannot leave Arista
+        # starting with OpenWrt's.  pri is not touched: Arista stays where it is.
+        "install_env": (
+            ("owrt_args", "console=ttyMSM0,115200n8"),
+            ("owrt_boot", "setenv mtdids nand0=nand0 && setenv mtdparts "
+                          "mtdparts=nand0:0x8000000@0x8000000(ubi) && ubi part ubi && "
+                          "ubi read 0x84000000 kernel && iminfo 0x84000000 && bootm 0x84000000"),
+            ("arista_boot", "setenv mtdids; setenv mtdparts; if test ${pri} = 0; then "
+                            "setenv bootargs ${ba0}; else setenv bootargs ${ba1}; fi; "
+                            "run ubootscript"),
+            ("bootcmd", "setenv bootargs ${owrt_args}; run owrt_boot; run arista_boot"),
+        ),
+        "install_where": "the upper half of the NAND, which Arista's firmware does not use",
+        "install_keeps": "Both of Arista's slots are left exactly as they are.",
     },
     "c200": {
         "name": "C-200",
         "target": "qualcommax/ipq60xx",
         "device": "arista_c-200",
         "fit_cfg": "config@cp01-c3",
-        # The C-230's flash scheme (factory.ubi into NAND slot 0), but its
-        # factory firmware's way in has not been run through this tool.
-        "field_install": False,
-        "manual": "RAM-boot its initramfs over TFTP from the console "
-                  "(bootm 0x60000000#config@cp01-c3), back up the flash, "
-                  "ubiformat slot 0 with its factory.ubi, then set the boot "
-                  "command once (c200/INSTALL.md in the port)",
+        # The C-230's flash scheme (factory.ubi into NAND slot 0).  Its flash, as
+        # read on a unit on Arista 11.0.0-36.19 (2026-11-15): 22 NOR partitions
+        # adding up to 32 MiB, the two kernels among them under the names
+        # HL_backup0 and HL_backup1, and two 256 MiB NAND slots.  11.0.0 has no
+        # radartool; the upgrade wizard is the way in.
+        "slot0": ("rootfs", "ubi"),
+        "slot1": ("rootfs_1",),
+        "appsblenv": ("0:APPSBLENV", "0:appsblenv"),
+        "need_nor": ("HL_backup1",),
+        "need_env": ("bootcmd", "ba0", "ba1", "ubootscript"),
+        "nor_total": 32 * 1024 * 1024,
+        "slot_size": 0x10000000,
+        "root_order": ("upgrade", "radartool"),
+        "fdt_high": None,                 # every C-200 RAM boot used Arista's own
+        "net_helper": True,
+        "net_tries": 3,
+        # Its image carries no installer script, so the steps are made here
+        # (do_install_ubiformat): the boot command first, then slot 0.  The
+        # variables are the ones the unit has booted with since 2026-11-02
+        # (c200/INSTALL.md in the port); pri=1 makes Arista's own boot use
+        # slot 1, the slot that is kept.
+        "install_by": "ubiformat",
+        "install_env": (
+            ("owrt_args", "console=ttyMSM0,115200n8 rootwait panic=10"),
+            ("owrt_parts", "setenv mtdids nand0=nand0; setenv mtdparts mtdparts=nand0:0x10000000@0x0(ubi)"),
+            ("owrt_load", "ubi part ubi && ubi read 0x44000000 kernel"),
+            ("owrt_boot", "run owrt_parts owrt_load && bootm 0x44000000#config@cp01-c3"),
+            ("arista_unset", "setenv mtdids; setenv mtdparts"),
+            ("arista_args", "if test ${pri} = 0; then setenv bootargs ${ba0}; else setenv bootargs ${ba1}; fi"),
+            ("arista_boot", "run arista_unset arista_args ubootscript"),
+            ("bootcmd", "setenv bootargs ${owrt_args}; run owrt_boot; run arista_boot"),
+            ("pri", "1"),
+        ),
+        "pri_note": "Arista calls slot 0 its primary on this unit, so the system that runs now is "
+                    "the one the install replaces; the copy in slot 1 is what is kept.",
+        # Back to Arista: its kept copy in slot 1, by the boot command alone.
+        "revert": "bootcmd",
+        "revert_env": (("pri", "1"),),
+        "revert_note": ("Arista's firmware starts again from its second slot, where the install",
+                        "left it.  OpenWrt stays in the first slot, no longer started."),
     },
     "c460": {
         "name": "C-460",
@@ -1380,16 +1541,28 @@ def _upgrade_wizard(pty, host, payload):
 
     if "Upgrade from Server/Host" not in first.group(0):
         # ---- 11.x: the wizard that is proven on hardware ----------------
-        pty.send("y")
-        for sub_pat in (r"Enter upgrade build version string",
-                        r"Enter upgrade build vendor version"):
-            mks = pty.mark()
-            if pty.wait(sub_pat, 30, mark=mks):
-                pty.send("1")
-        if not pty.wait(SERVER_PAT, 30):
-            raise MethodFailed("the upgrade flow did not ask for a server address the usual way;\n"
-                "run 'upgrade' by hand once and send the full prompt sequence so the\n"
-                "tool can be matched to this build.")
+        # 8.9 and 11.x ask for two version strings before the server; 8.7.1
+        # (a W-118) asks for the server straight away.  Whatever comes is
+        # answered as it comes, searching from one mark, so a server prompt
+        # that is already on screen is not waited past.
+        mky = pty.mark()
+        if not re.search(SERVER_PAT, first.group(0)):
+            pty.send("y")
+        for _ in range(4):
+            got = pty.wait(r"(Enter upgrade build version string)|"
+                           r"(Enter upgrade build vendor version)|(%s)" % SERVER_PAT,
+                           30, mark=mky)
+            if not got:
+                raise MethodFailed("the upgrade flow did not ask for a server address the usual way;\n"
+                    "run 'upgrade' by hand once and send the full prompt sequence so the\n"
+                    "tool can be matched to this build.\n%s" % pty.since(mk).strip()[-600:])
+            if got.group(3):
+                break
+            mky = pty.mark()
+            pty.send("1")
+        else:
+            raise MethodFailed("the upgrade flow kept asking for version strings:\n%s"
+                               % pty.since(mk).strip()[-600:])
         pty.send(payload)
         # Confirm? follows the server address on 11.x; only answer it if it comes.
         if pty.wait(CONFIRM_PAT, 90):
@@ -1580,9 +1753,13 @@ def _connect_once(host, user=None, password=None):
     # the same facts under 'show device info' instead (seen on a C-260, build
     # 16.1.0-51.6, 2026-11-04).  Fall back to it whenever 'version' did not name
     # a model; 11.x still answers 'version', so this is additive.
-    if not any(d["name"] in text for d in MODELS.values()):
+    # Firmware 8.7 has neither: its command is 'get version' (a W-118 on
+    # 8.7.1-03.2, 2026-11-15), with the same "Device Build: [X]" line as 11.x.
+    for other in ("show device info", "get version"):
+        if any(d["name"] in text for d in MODELS.values()):
+            break
         mk2 = pty.mark()
-        pty.send("show device info")
+        pty.send(other)
         time.sleep(3)
         text += "\n" + pty.since(mk2)
     model = None
@@ -1807,6 +1984,15 @@ def verify_stock_emmc(pty, card):
     env = find_part(card["mtd"], d["appsblenv"])
     if not env:
         problems.append("no U-Boot environment partition (%s)" % "/".join(d["appsblenv"]))
+    if d.get("need_nor") and not find_part(card["mtd"], d["need_nor"]):
+        problems.append("no %s (the fallback kernel)" % d["need_nor"][0])
+    # What the running firmware has mounted for writing changes under a read
+    # (the W-318: its settings on mmcblk0p4 and CONFIG as jffs2); saved as read.
+    mounts, _ = pty.run("cat /proc/mounts", 20)
+    card["live"] = set()
+    for dev, opts in re.findall(r"^/dev/(\S+)\s+\S+\s+\S+\s+(\S+)", mounts, re.M):
+        if "rw" in opts.split(","):
+            card["live"].add(re.sub(r"^mtdblock", "mtd", dev))
     nor_bytes = sum(r["size"] for r in card["mtd"])
     if nor_bytes != d["nor_total"]:
         problems.append("NOR partitions add up to %d bytes, expected %d"
@@ -1898,6 +2084,11 @@ def live_partitions(pty, card):
     slot = {"0": card.get("slot0"), "1": card.get("slot1")}.get(str(card.get("pri")))
     if slot:
         live.add(slot["dev"])
+    # And a NOR partition mounted for writing (Arista keeps CONFIG as jffs2).
+    out, _ = pty.run("cat /proc/mounts", 20)
+    for dev, opts in re.findall(r"^/dev/mtdblock(\d+)\s+\S+\s+\S+\s+(\S+)", out, re.M):
+        if "rw" in opts.split(","):
+            live.add("mtd%s" % dev)
     return live
 
 
@@ -1963,7 +2154,10 @@ def verify_stock(pty, card):
     card["pri"] = (re.search(r"^pri=(\S+)", env_text, re.M) or [None, "?"])[1] \
         if re.search(r"^pri=(\S+)", env_text, re.M) else "?"
     m.say("  Arista's primary slot (pri): %s" % card["pri"])
-    if card["pri"] == "0":
+    if d.get("keeps_arista"):
+        m.say("  Neither Arista slot is replaced on this model: OpenWrt goes into flash")
+        m.say("  that Arista's firmware does not use.")
+    elif card["pri"] == "0":
         m.say("  NOTE: %s" % (d.get("pri_note") or
                               "Arista calls slot 0 its primary, so the system that runs "
                               "is the one the install replaces."))
@@ -2236,7 +2430,11 @@ def fit_config_for(path, preferred):
         head = open(path, "rb").read()   # the FDT can sit anywhere in the FIT
     except Exception:
         return preferred, []
-    names = sorted({m.decode() for m in re.findall(rb"config@[A-Za-z0-9]+", head)})
+    # A name may hold '-', '_' and '.': the W-318's and C-200's is config@cp01-c3.
+    # Without the hyphen it was read as "config@cp01", taken for the image's
+    # only configuration, and U-Boot was told to boot one that is not there:
+    # four fetches, four refused bootm, and no console to say why (2026-11-15).
+    names = sorted({m.decode() for m in re.findall(rb"config@[A-Za-z0-9._-]+", head)})
     if preferred in names:
         return preferred, names
     if len(names) == 1:
@@ -2287,7 +2485,14 @@ def netboot_env(pc_ip, ap_ip, itb_name, cfg, load="0x60000000",
     stock_bootcmd is the model's own boot command (the C-460's carries a
     trailing ';'), and fdt_high=None leaves the model's own value alone (the
     C-460's 0x48500000 is what its RAM boots use)."""
-    clear = 'setenv bootcmd "%s"; saveenv' % stock_bootcmd
+    # A boot command that holds double quotes and ${...} of its own (the W-318's)
+    # goes back inside single quotes, so U-Boot stores it as written instead of
+    # expanding it when owrt_clear runs.
+    clear = ("setenv bootcmd '%s'; saveenv" if '"' in stock_bootcmd
+             else 'setenv bootcmd "%s"; saveenv') % stock_bootcmd
+    # A model with one FIT configuration and an old U-Boot boots it with a bare
+    # bootm (cfg None: the W-118).
+    boot = "bootm %s#%s" % (load, cfg) if cfg else "bootm %s" % load
     head = ("%ssetenv ipaddr %s; setenv gatewayip %s; setenv serverip %s; %s"
             "setenv bootargs console=ttyMSM0,115200n8 rootwait panic=0; "
             % (("setenv netretry %s; " % netretry) if netretry else "",
@@ -2302,17 +2507,17 @@ def netboot_env(pc_ip, ap_ip, itb_name, cfg, load="0x60000000",
         # manual boots, 2026-11-12) needs to span.  "tftpboot && bootm" boots on
         # the first success; on a miss it sleeps retry_sleep and the next run
         # tries again.
-        out.append(("owrt_try", "tftpboot %s %s && bootm %s#%s; sleep %d"
-                    % (load, itb_name, load, cfg, retry_sleep)))
+        out.append(("owrt_try", "tftpboot %s %s && %s; sleep %d"
+                    % (load, itb_name, boot, retry_sleep)))
         fetch = head + "sleep %d; " % net_settle + "run owrt_try; " * net_tries + "reset"
         out.append(("owrt_nb", fetch))
     else:
         # The proven inline form (C-230/C-260): a settle, net_tries tftpboot calls,
         # then reset.  A several-hundred-character fw_setenv gets truncated by the
         # AP's tty (2026-10-25), which bounds how many attempts fit this way.
-        attempts = "sleep %d; tftpboot %s %s && bootm %s#%s; " % (net_settle, load, itb_name, load, cfg)
+        attempts = "sleep %d; tftpboot %s %s && %s; " % (net_settle, load, itb_name, boot)
         for _ in range(max(0, net_tries - 1)):
-            attempts += "sleep %d; tftpboot %s %s && bootm %s#%s; " % (retry_sleep, load, itb_name, load, cfg)
+            attempts += "sleep %d; tftpboot %s %s && %s; " % (retry_sleep, load, itb_name, boot)
         out.append(("owrt_nb", head + attempts + "reset"))
     out.append(("bootcmd", "run owrt_clear; run owrt_nb"))
     return out
@@ -2923,12 +3128,15 @@ def boot_installer(run, card, pc_ip, ap_ip, itb, kind):
     itb_name = os.path.basename(itb)
     short = "%s.itb" % card["model"]      # short on purpose: it is pasted into a line
     mdl = MODELS[card["model"]]
-    cfg, seen = fit_config_for(itb, mdl["fit_cfg"])
-    if cfg != mdl["fit_cfg"]:
-        m.note("this image boots %s (the %s default is %s); using what the image has"
-               % (cfg, mdl["name"], mdl["fit_cfg"]))
-    if not seen:
-        m.note("could not read a configuration name out of the image; using %s" % cfg)
+    if mdl.get("fit_cfg") is None:
+        cfg = None                      # booted with a bare bootm (the W-118)
+    else:
+        cfg, seen = fit_config_for(itb, mdl["fit_cfg"])
+        if cfg != mdl["fit_cfg"]:
+            m.note("this image boots %s (the %s default is %s); using what the image has"
+                   % (cfg, mdl["name"], mdl["fit_cfg"]))
+        if not seen:
+            m.note("could not read a configuration name out of the image; using %s" % cfg)
     writes = netboot_env(pc_ip, ap_ip, short, cfg, mdl.get("load_addr", "0x60000000"),
                          mdl.get("stock_bootcmd", "run ubootscript"),
                          mdl.get("fdt_high", "0x4A3E0000"),
@@ -3133,9 +3341,11 @@ def do_install_emmc(run, card, ip, image, _sums):
     m.say("  Checks passed.  About to write, on this AP:")
     m.say("    1 U-Boot environment write: the boot command (%s)"
           % ", ".join(n for n, _ in d["install_env"]))
-    m.say("    eMMC slot 0: the kernel to 0:HLOS and the root filesystem to rootfs")
-    m.say("    Arista's slot 1 (%s) is left as the fallback (pri=1)."
-          % ", ".join(d["slot1_parts"]))
+    where = d.get("install_where") or "eMMC slot 0: the kernel to 0:HLOS and the root filesystem to rootfs"
+    m.say("    %s" % where)
+    m.say("    %s" % (d.get("install_keeps") or
+                      "Arista's slot 1 (%s) is left as the fallback (pri=1)."
+                      % ", ".join(d.get("slot1_parts", ()))))
     if not run.yes_install and not run.yes:
         mac = board_mac(con) or card.get("mac") or "?"
         tail = mac.replace(":", "")[-4:]
@@ -3163,18 +3373,203 @@ def do_install_emmc(run, card, ip, image, _sums):
     # 2) the image: sysupgrade writes slot 0 and reboots into OpenWrt.  It detaches
     #    and kills processes before rebooting, so the SSH channel drops mid-way --
     #    expected, not a failure; verify_openwrt waits for the AP to return.
-    m.say("  Writing the image to eMMC slot 0; sysupgrade reboots into OpenWrt.")
-    run.flash_writes.append("eMMC 0:HLOS + rootfs (sysupgrade -n)")
+    m.say("  Writing the image; sysupgrade reboots into OpenWrt.")
+    run.flash_writes.append("%s (sysupgrade -n)"
+                            % ("eMMC 0:HLOS + rootfs" if is_emmc(card["model"]) else "NAND ubi"))
     with Heartbeat("sysupgrade", 20):
         out, _ = m.ssh_exec(con, "sysupgrade -n %s 2>&1" % remote, 600)
     for line in out.splitlines():
         if line.strip():
             m.say("    " + line.rstrip())
-    m.say("  sysupgrade is writing slot 0 and will reboot the AP into OpenWrt.")
+    m.say("  sysupgrade is writing the image and will reboot the AP into OpenWrt.")
+
+
+def do_install_script(run, card, ip, image, _sums):
+    """Install where the image carries its own installer that takes the
+    sysupgrade file (the W-318's arista-w318-install).
+
+    The script is the port's: it checks the unit (layout, calibration, that
+    slot 1 holds an Arista system with what OpenWrt's first boot copies from
+    it), writes the boot command with one fw_setenv, blanks NOR 0:HLOS so a
+    stopped install boots Arista, writes the system and the kernel, and reads
+    both back.  Here it is run twice: --dry-run, which writes nothing, and then
+    for real.  Its last line says how it ended."""
+    con = run.installer
+    d = MODELS[card["model"]]
+    tool = d["installer"]
+    out, _ = m.ssh_exec(con, "command -v %s fw_printenv >/dev/null && echo ok" % tool, 60)
+    if "ok" not in out:
+        m.die("the RAM installer lacks %s; this build cannot install the %s:\n%s"
+              % (tool, d["name"], out[-300:]))
+    stage = "/tmp/" + card["model"]
+    m.ssh_must(con, "rm -rf %s; mkdir -p %s" % (stage, stage), 60)
+    remote = stage + "/sysupgrade.bin"
+    m.say("  Sending the image (%.1f MiB) to %s over SSH."
+          % (os.path.getsize(image) / 1048576.0, remote))
+    _send_file(con, image, remote, "the image")
+    out, _ = m.ssh_exec(con, "sha256sum %s | cut -d' ' -f1" % remote, 600)
+    if out.strip() != sha256_file(image):
+        m.die("the image arrived wrong on the AP (sha256 mismatch)")
+    m.say("    on the AP and sha256-verified.")
+
+    def result(text):
+        mm = re.findall(r"INSTALL-RESULT:\s*(.*)", text)
+        return mm[-1].strip() if mm else ""
+
+    m.say("")
+    m.say("  Running the installer's own checks (this writes nothing):")
+    with Heartbeat("installer dry run", 20):
+        out, _ = m.ssh_exec(con, "%s --dry-run %s 2>&1" % (tool, remote), 900)
+    for line in out.splitlines():
+        m.say("    " + line.rstrip())
+    if not result(out).startswith("OK"):
+        m.die("the installer's checks did not pass, so nothing was written:\n%s"
+              % "\n".join(out.strip().splitlines()[-8:]))
+    m.say("")
+    m.say("  Checks passed.  The installer now writes, on this AP: the boot command")
+    m.say("  (one U-Boot environment write), the system to eMMC slot 0 and the kernel")
+    m.say("  to NOR 0:HLOS.  Slot 1 and the calibration are not written.")
+    before, _ = m.ssh_exec(con, "fw_printenv bootcmd 2>&1", 30)
+    with Heartbeat("Installing", 20):
+        out, _ = m.ssh_exec(con, "%s --yes %s 2>&1" % (tool, remote), 1800)
+    for line in out.splitlines():
+        m.say("    " + line.rstrip())
+    after, _ = m.ssh_exec(con, "fw_printenv bootcmd 2>&1", 30)
+    if after.strip() != before.strip():
+        run.env_writes.append("boot command (installer)")
+    if not result(out).startswith("OK"):
+        if "erase" in out.lower() or after.strip() != before.strip():
+            run.flash_writes.append("slot 0, partly (installer stopped)")
+        m.die("the installer stopped:\n%s\nIf it had started writing, slot 0 is incomplete and "
+              "the AP boots Arista's\nfirmware from slot 1 by itself; run the tool again."
+              % "\n".join(out.strip().splitlines()[-8:]))
+    run.flash_writes.append("eMMC rootfs + NOR 0:HLOS (installer)")
+    m.say("  Installed and read back.  Restarting the AP into OpenWrt.")
+    m.ssh_exec(con, "sync; reboot", 20)
+
+
+def do_install_ubiformat(run, card, ip, ubi, sums):
+    """Install for a NAND model whose image has no installer script of its own
+    (the C-200): the steps of its by-hand install, with the checks made first.
+
+    Order matters.  The boot command is written before slot 0 is touched: it
+    tries OpenWrt and falls back to Arista in slot 1, so from that write on a
+    stopped install boots Arista by itself.  Then slot 0 is formatted with the
+    factory image, and its volumes are read back against the release's sums."""
+    con = run.installer
+    d = MODELS[card["model"]]
+    stage = "/tmp/" + card["model"]
+
+    def need(cond, why):
+        if not cond:
+            m.die("the installer's checks did not pass, so nothing was written:\n%s" % why)
+
+    m.say("")
+    m.say("  Checking this unit from the RAM installer (this writes nothing):")
+    out, _ = m.ssh_exec(con, "command -v ubiformat ubidetach ubiattach fw_setenv fw_printenv "
+                             ">/dev/null && echo ok", 60)
+    need("ok" in out, "the RAM installer lacks ubiformat or the U-Boot environment tools")
+    rows = mtd_table(m.ssh_must(con, "cat /proc/mtd", 30))
+    s0, s1 = find_part(rows, d["slot0"]), find_part(rows, d["slot1"])
+    need(s0 and s0["size"] == d["slot_size"], "no slot 0 of the expected size (%s)" % (d["slot0"],))
+    need(s1, "no slot 1 (%s)" % (d["slot1"],))
+    k1 = find_part(rows, d["need_nor"])
+    need(k1, "no %s (Arista's kernel for slot 1)" % d["need_nor"][0])
+    # The fallback has to be there before slot 0 goes: slot 1 must hold a UBI,
+    # and its kernel partition an image (Arista's is an ELF, a FIT elsewhere).
+    out, _ = m.ssh_exec(con, "hexdump -n 4 -e '4/1 \"%%02x\"' /dev/%s; echo; "
+                             "hexdump -n 4 -e '4/1 \"%%02x\"' /dev/%s; echo" % (s1["dev"], k1["dev"]), 60)
+    magic = out.split()
+    need(len(magic) == 2 and magic[0] == "55424923",
+         "slot 1 (%s) holds no UBI, so there would be no Arista to fall back to" % s1["dev"])
+    need(magic[1] in ("7f454c46", "d00dfeed"),
+         "%s holds no kernel (%s), so there would be no Arista to fall back to" % (k1["name"], magic[1]))
+    env, _ = m.ssh_exec(con, "fw_printenv 2>&1", 60)
+    need(re.search(r"^ubootscript=", env, re.M) and re.search(r"^ba1=", env, re.M),
+         "the U-Boot environment cannot be read from the RAM installer:\n%s" % env.strip()[-200:])
+    m.say("    slot 0 %s, slot 1 %s (a UBI), %s (a kernel), environment readable"
+          % (s0["dev"], s1["dev"], k1["name"]))
+
+    m.ssh_must(con, "rm -rf %s; mkdir -p %s" % (stage, stage), 60)
+    remote = stage + "/factory.ubi"
+    m.say("  Sending the image (%.1f MiB) to %s over SSH."
+          % (os.path.getsize(ubi) / 1048576.0, remote))
+    _send_file(con, ubi, remote, "the image")
+    want = sha256_file(ubi)
+    out, _ = m.ssh_exec(con, "sha256sum %s | cut -d' ' -f1; hexdump -n 4 -e '4/1 \"%%02x\"' %s"
+                        % (remote, remote), 600)
+    got = out.split()
+    need(len(got) == 2 and got[0] == want, "the image arrived wrong on the AP (sha256 mismatch)")
+    need(got[1] == "55424923", "the image is not a UBI image")
+    listed = {}
+    if sums and os.path.exists(sums):
+        for line in open(sums, encoding="utf-8", errors="replace"):
+            f = line.split()
+            if len(f) >= 2 and f[1] == "factory.ubi":
+                need(f[0] == want, "the image does not match its release's install sums")
+            elif len(f) >= 3 and f[1].startswith("volume:"):
+                listed[f[1][7:]] = (f[0], int(f[2]))
+    m.say("    on the AP and sha256-verified.")
+
+    m.say("")
+    m.say("  Checks passed.  About to write, on this AP: the boot command (one U-Boot")
+    m.say("  environment write), then NAND slot 0 (%s).  Slot 1 and the calibration" % s0["dev"])
+    m.say("  are not written.")
+    env_lines = "".join("%s %s\n" % (n, v) for n, v in d["install_env"])
+    names = ", ".join(n for n, _ in d["install_env"])
+    out, rc = m.ssh_exec(con, "printf %s | fw_setenv -s -" % _shq(env_lines), 120)
+    m.LOG.write("\nENV WRITE (install_env): rc=%s %s\n" % (rc, out))
+    if rc != 0:
+        m.die("writing the boot command failed (exit %s): %s\nNothing else was written." % (rc, out[-300:]))
+    chk, _ = m.ssh_exec(con, "fw_printenv bootcmd pri 2>&1", 30)
+    if "run owrt_boot" not in chk or "run arista_boot" not in chk or not re.search(r"^pri=1$", chk, re.M):
+        m.die("the boot command did not read back as written:\n%s\nSlot 0 was not touched." % chk[-300:])
+    run.env_writes.append("boot command (%s)" % names)
+    m.say("    boot command written and read back (OpenWrt first, Arista in slot 1 as the fallback).")
+
+    m.say("  Formatting slot 0 with the image (about a minute):")
+    run.flash_writes.append("NAND slot 0 (ubiformat)")
+    with Heartbeat("writing slot 0", 12):
+        out, _ = m.ssh_exec(con, "ubidetach -p /dev/%s >/dev/null 2>&1; "
+                                 "ubiformat /dev/%s -y -q -f %s 2>&1; echo UBIFORMAT_RC=$?; "
+                                 "ubiattach -p /dev/%s 2>&1 | tail -1"
+                            % (s0["dev"], s0["dev"], remote, s0["dev"]), 1800)
+    for line in out.splitlines()[-6:]:
+        if line.strip():
+            m.say("    " + line.rstrip())
+    attached = re.search(r"UBI device number (\d+)", out)
+    if "UBIFORMAT_RC=0" not in out or not attached:
+        m.die("slot 0 does not attach as a UBI after the write:\n%s\nThe AP boots Arista's firmware "
+              "from slot 1 by itself; run the tool again." % out.strip()[-400:])
+    n = attached.group(1)
+    vols, _ = m.ssh_exec(con, "for v in /sys/class/ubi/ubi%s_*; do echo \"$(cat $v/name) $(basename $v)\"; done"
+                         % n, 60)
+    have = dict(l.split()[:2] for l in vols.splitlines() if len(l.split()) >= 2)
+    for vol in ("kernel", "rootfs"):
+        if vol not in have:
+            m.die("slot 0 has no %s volume after the write (found: %s).\nThe AP boots Arista's firmware "
+                  "from slot 1 by itself; run the tool again." % (vol, ", ".join(sorted(have)) or "none"))
+        if vol in listed:
+            sha, size = listed[vol]
+            got, _ = m.ssh_exec(con, "head -c %d /dev/%s | sha256sum | cut -d' ' -f1" % (size, have[vol]), 600)
+            if got.strip() != sha:
+                m.die("the %s volume in slot 0 does not read back as the release's.\nThe AP boots "
+                      "Arista's firmware from slot 1 if OpenWrt does not start; run the tool again." % vol)
+    m.say("    slot 0 written; its kernel and rootfs volumes read back as the release's.")
+    m.ssh_exec(con, "ubidetach -p /dev/%s >/dev/null 2>&1; sync" % s0["dev"], 60)
+    m.say("  Restarting the AP into OpenWrt.")
+    m.ssh_exec(con, "reboot", 20)
 
 
 def do_install(run, card, ip, ubi, sums):
-    if is_emmc(card["model"]):
+    if MODELS[card["model"]].get("install_by") == "script":
+        return do_install_script(run, card, ip, ubi, sums)
+    if MODELS[card["model"]].get("install_by") == "ubiformat":
+        return do_install_ubiformat(run, card, ip, ubi, sums)
+    # A model whose release image is the sysupgrade one is installed by
+    # sysupgrade itself, after one boot-command write: the C-460 (eMMC) and the
+    # W-118 (NAND, into flash Arista does not use).
+    if is_emmc(card["model"]) or MODELS[card["model"]].get("image") == "sysupgrade":
         return do_install_emmc(run, card, ip, ubi, sums)
     con = run.installer
     m.say("")
@@ -3575,6 +3970,56 @@ def do_restore(run, card, manifest, backup_dir):
     m.ssh_exec(con, "sync; reboot", 20)
 
 
+def do_restore_bootcmd(run, who, d):
+    """Back to Arista on a model whose install never replaced it (the W-118):
+    one environment write from OpenWrt, then a restart.
+
+    The boot command goes back to the model's own, the variables the install
+    added are removed, and bootargs is set to the slot `pri` names -- Arista's
+    boot only rewrites it when `pri` changes, so a value left by anything else
+    would be what Arista starts with."""
+    con = ssh_open(who["ip"], who.get("user") or "root", who.get("password") or "", timeout=15)
+    env, _ = ssh_exec(con, "fw_printenv 2>&1", 60)
+    have = dict(l.split("=", 1) for l in env.splitlines() if "=" in l)
+    if "ubootscript" not in have or "bootcmd" not in have:
+        die("this AP's boot variables cannot be read from OpenWrt, so they were not changed:\n%s"
+            % env.strip()[-300:])
+    pri = have.get("pri", "0").strip()
+    args = have.get("ba0" if pri == "0" else "ba1")
+    lines = ["bootcmd %s" % d.get("stock_bootcmd", "run ubootscript")]
+    if d.get("revert_env"):
+        # A model whose install took slot 0 and kept slot 1 (the W-318): the
+        # values that make Arista's own boot choose the kept slot.
+        lines += ["%s %s" % (n, v) for n, v in d["revert_env"]]
+        pri = dict(d["revert_env"]).get("pri", pri)
+    elif args:
+        lines.append("bootargs %s" % args)
+    for name in tuple(n for n, _v in d.get("install_env", ())) + tuple(d.get("revert_names", ())):
+        if name != "bootcmd" and name in have:
+            lines.append(name)
+    for name in ("mtdids", "mtdparts"):
+        if name in have:
+            lines.append(name)
+    say("  Writing Arista's boot command back (pri=%s):" % pri)
+    for line in lines:
+        say("    %s" % line[:110])
+    out, rc = ssh_exec(con, "printf %s | fw_setenv -s -" % _shq("\n".join(lines) + "\n"), 120)
+    LOG.write("\nENV WRITE (back to Arista): rc=%s %s\n" % (rc, out))
+    if rc != 0:
+        die("writing the boot command failed (exit %s): %s\nNothing else was changed." % (rc, out[-300:]))
+    chk, _ = ssh_exec(con, "fw_printenv bootcmd 2>&1", 30)
+    if chk.strip() != "bootcmd=%s" % d.get("stock_bootcmd", "run ubootscript"):
+        die("the boot command did not read back as written:\n%s" % chk[-300:])
+    run.env_writes.append("boot command back to Arista's")
+    global _REBOOTED
+    _REBOOTED = True
+    ssh_exec(con, "sync; reboot", 20)
+    try:
+        con.close()
+    except Exception:
+        pass
+
+
 def card_slot_names(d):
     return d["slot0"], d["slot1"]
 
@@ -3715,7 +4160,8 @@ def find_ap(prefix, timeout, want_ram=None, skip=(), mac=None):
 # MAC prefixes these access points carry (Arista, and Mojo before it), each seen
 # on a unit.  Only a host with one of these is ever asked who it is: a factory
 # login is never tried against the rest of somebody's network.
-AP_OUIS = ("30:86:2d", "e4:d1:24", "e0:1c:a7")
+AP_OUIS = ("30:86:2d", "e4:d1:24", "e0:1c:a7",
+           "88:b1:e1")              # the W-118's (the older Mojo block)
 
 
 def _private(ip):
@@ -4693,6 +5139,14 @@ def main():
                 tell("  - This AP does not say which build it runs, so this one may not be newer.")
             tell("  - Settings are kept; packages you added yourself are not.")
             tell("  - The AP restarts once and is back in about 3 minutes.")
+        elif action == "restore" and mdl.get("revert") == "bootcmd":
+            tell("Ready to switch this %s back to Arista's firmware." % mdl["name"])
+            tell("")
+            note_lines = mdl.get("revert_note") or ("Only the boot command changes.",)
+            tell("  - %s" % note_lines[0])
+            for line in note_lines[1:]:
+                tell("    %s" % line)
+            tell("  - The AP restarts once and is back in about 4 minutes.")
         elif action == "restore":
             tell("Ready to put this %s's own firmware back, from" % mdl["name"])
             tell("  %s" % backup_dir)
@@ -4761,6 +5215,39 @@ def main():
         else:
             tell("The image was accepted and written, but the AP has not answered yet.")
             tell("Give it a few minutes; if it still does not answer, power-cycle it.")
+        tell("Log: %s" % log_path())
+        return
+
+    # ---- back to Arista where the install never replaced it -----------------
+    if action == "restore" and mdl.get("revert") == "bootcmd":
+        if stock:
+            tell("")
+            tell("This AP already runs Arista's firmware.  Nothing was changed.")
+            return
+        TOTAL_STEPS = 1 if a.no_wait else 2
+        step("Put Arista's boot command back",
+             "One boot-command change; Arista's firmware is still in its own flash.",
+             "Nothing else was changed; OpenWrt still starts if the change was not made.")
+        with Heartbeat("Changing the boot command"):
+            who["user"], who["password"] = who.get("user") or "root", who.get("password") or ""
+            do_restore_bootcmd(run, who, mdl)
+        tell("     done; the AP is restarting on Arista's firmware")
+        if a.no_wait:
+            report_writes(run)
+            tell("Log: %s" % log_path())
+            return
+        step("Wait for Arista's firmware to start",
+             "The AP restarts from its own slot; it is found again by its MAC address.",
+             "Give it a few more minutes; Arista's firmware takes about 3 minutes to start.")
+        with Heartbeat("Waiting for Arista's firmware"):
+            back = find_stock(prefix, 420, mac=who.get("mac"))
+        tell("")
+        if back and back[0]:
+            tell("Done.  This %s runs Arista's firmware again, at %s." % (mdl["name"], back[0]))
+        else:
+            tell("The boot command is Arista's again, but the AP has not answered yet.")
+            tell("Give it a few minutes; it may have taken a new address.")
+        report_writes(run)
         tell("Log: %s" % log_path())
         return
 

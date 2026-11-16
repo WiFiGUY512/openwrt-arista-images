@@ -227,6 +227,8 @@ STOCK_C260 = {"kind": "stock", "model": "c260", "name": "C-260", "mac": "30:86:2
               "firmware": "11.0.1-49.8"}
 STOCK_C460 = dict(STOCK_C260, model="c460", name="C-460", mac="e0:1c:a7:00:00:02", firmware="18.2.0-32")
 STOCK_W318 = dict(STOCK_C260, model="w318", name="W-318", mac="e4:d1:24:00:00:03")
+# The one model with no confirmed way in (2026-11-15): the C-200.
+STOCK_C200 = dict(STOCK_C260, model="c200", name="C-200", mac="e4:d1:24:00:00:06")
 OWRT = lambda n: {"kind": "openwrt", "model": "c260", "name": "C-260", "mac": "30:86:2d:00:00:01",  # noqa: E731
                   "board": "arista,c-260", "series": "SNAPSHOT", "ram": False, "user": "root",
                   "password": "", "release": "x", "build": T % ("%d-gabcdef0" % n)}
@@ -268,11 +270,16 @@ check("only save the firmware: no question, no release, no installer, and the AP
                                  "pty_clean"]
       and "nothing on the AP was changed" in s.out, (s.calls, s.out[-300:]))
 
-# 5. a model with no confirmed way in is refused before anything
-s = Script(STOCK_W318, [], argv=["--host", "192.168.1.63"]).run()
-check("W-318 on Arista's firmware: refused before any login for a shell, with the by-hand page",
-      s.died and not (set(s.calls) & WRITERS) and "w318/INSTALL.md" in s.out
+# 5. a model with no confirmed way in is refused before anything.  Every model
+#    in the table installs now (the C-200 was the last, 2026-11-15), so one is
+#    marked as not installable for this check: the refusal is still what a new
+#    model gets until a unit has proven its path.
+af.MODELS["c200"]["field_install"] = False
+s = Script(STOCK_C200, [], argv=["--host", "192.168.1.63"]).run()
+check("a model the tool cannot install: refused before any login for a shell, with the by-hand page",
+      s.died and not (set(s.calls) & WRITERS) and "c200/INSTALL.md" in s.out
       and "Nothing was changed" in s.out, s.out[-400:])
+del af.MODELS["c200"]["field_install"]
 
 # 6. C-460: the helper files are fetched before the AP is touched, and no TFTP port is asked for
 ports = []

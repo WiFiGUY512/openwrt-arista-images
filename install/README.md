@@ -77,7 +77,9 @@ page or with `sysupgrade`, or run this tool again and it offers the update.
 | C-260 | yes | installed and put back on a unit (Arista 11.0.1); the way in is confirmed on 16.1.0 |
 | C-360 | yes | installed on a unit (Arista 20.0.0); putting Arista back with the tool has not been run on one yet |
 | C-460 | yes | installed and put back on a unit (Arista 18.2.0), once its first build is published |
-| W-318, W-118, C-200 | not yet | no confirmed way into Arista's firmware on these; install them [by hand](BY-HAND.md), with a console cable |
+| W-118 | yes | installed on a unit twice and switched back to Arista once (Arista 8.7.1); OpenWrt goes into flash Arista does not use, so Arista's firmware is never replaced |
+| W-318 | yes | installed on a unit twice and switched back to Arista once (Arista 18.0.0); Arista's copy in the second slot is kept |
+| C-200 | yes | installed on a unit twice and switched back to Arista once (Arista 11.0.0); Arista's copy in the second slot is kept |
 
 An AP of any of these models that already runs this OpenWrt port can be
 **updated** with the same tool.

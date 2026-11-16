@@ -1,11 +1,9 @@
 # Installing by hand
 
 **Most people do not need this page.** The [network installer](README.md) does
-the whole install from a PC, with no cable, for the C-230, C-260, C-360 and
-C-460. This page is for:
+the whole install from a PC, with no cable, for every model here: the C-200,
+C-230, C-260, C-360, C-460, W-118 and W-318. This page is for:
 
-- the **W-318, W-118 and C-200**, which the network installer cannot install
-  yet (no way into Arista's firmware has been confirmed on them);
 - an AP the network installer cannot reach or log in to;
 - anyone who wants to see every step.
 

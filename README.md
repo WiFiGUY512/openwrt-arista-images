@@ -28,9 +28,11 @@ what you will see, what it needs, and what to do if it stops.
 
 | Model | Installs over the network |
 |---|---|
-| C-230, C-260, C-360 | yes |
+| C-200, C-230, C-260, C-360 | yes |
+| W-118, W-318 | yes |
 | C-460 | yes, from its first published build |
-| W-318, W-118, C-200 | not yet: [by hand](install/BY-HAND.md), with a console cable |
+
+Every model can also be installed [by hand](install/BY-HAND.md), with a console cable.
 
 To go back to Arista's firmware, run the same command: the menu offers it for
 any AP whose firmware that PC saved.

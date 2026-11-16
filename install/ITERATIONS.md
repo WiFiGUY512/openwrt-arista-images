@@ -105,6 +105,56 @@ Seen and left alone:
   whole run without one is `--install --yes`.
 - The test suites write their run logs into `logs/` beside real ones.
 
+### 2026-11-15, evening -- the W-118
+
+A W-118 on Arista 8.7.1-03.2 was installed over the network on the first
+attempt (6 minutes), switched back to Arista by the tool, and installed again.
+`test-w118.py` (18 checks) holds its path in place.
+
+| # | change | why |
+|---|---|---|
+| 56 | an SSH server too old for the library is still reached | 8.7.1 offers one key exchange (diffie-hellman-group1-sha1) and one host-key type (ssh-rsa with SHA-1); current paramiko has neither, and the login failed before anything else could. `_old_ssh()` adds both to that one connection, after the ordinary attempt has failed, placed last so a current server never picks them |
+| 57 | `get version`, and a wizard that asks for the server at once | 8.7.1 has neither `version` nor `show device info`; and its `upgrade` goes from Continue? straight to the server prompt, where 8.9 and 11.x ask two version questions first. The wizard now answers whatever comes, searching from one mark; waiting 30 s for each absent question had walked past the prompt that was already on screen |
+| 58 | the W-118's path | no `radartool` in its CLI: the wizard is the way in. Its image is fetched to 0x84000000 and started with a bare `bootm` (`fit_cfg` None), `fdt_high` left alone. The install is the C-460's shape: one `fw_setenv` for the boot command, then OpenWrt's own `sysupgrade -n`, here into the upper half of the NAND, which Arista never uses. Neither Arista slot is written and `pri` is not changed |
+| 59 | back to Arista on a model that keeps it | `keeps_arista`: one boot-command write from OpenWrt (Arista's own `bootcmd`, the install's variables removed, `bootargs` set to the slot `pri` names) and a restart. No RAM installer and no flash write |
+| 60 | discovery looks at the W-118's MAC prefix | `88:b1:e1`, the older block; the three known ones did not cover it |
+
+### 2026-11-15, night -- the W-318
+
+A W-318 on Arista 18.0.0-176.12 was installed over the network, switched back
+to Arista by the tool, and installed again unattended (6.7 minutes).
+`test-w318.py` (18 checks) holds its path in place.
+
+| # | change | why |
+|---|---|---|
+| 61 | a configuration name is read whole | `config@cp01-c3` was read as `config@cp01` (the pattern stopped at the hyphen), taken for the image's only configuration, and written into the boot variable. U-Boot fetched the image four times and refused each `bootm`. With no console on the unit, the cause was found by making U-Boot ask this PC for a differently named file after each step that succeeded (`tftpboot ... && tftpboot <marker>`): every step passed with the right name. The C-200 has the same name and would have failed the same way |
+| 62 | a stock boot command with quotes of its own | the W-318's holds `"${default_env_version}"`. `owrt_clear` puts it back inside single quotes, so U-Boot stores it as written instead of expanding it |
+| 63 | the W-318's path | `radartool` is the way in on 18.0.0. Its kernels are in NOR and its systems on the eMMC: the eMMC check gains `need_nor`, and what the running firmware has mounted for writing (its settings partition, CONFIG) is saved as read. The install is the image's own `arista-w318-install`, run with `--dry-run` and then `--yes` (`install_by: script`); it checks that slot 1 holds an Arista system with the radio files OpenWrt's first boot copies |
+| 64 | back to Arista by the boot command, for a model that keeps one slot | `revert: bootcmd` with `revert_env`: Arista's own `bootcmd`, `pri=1`, slot 1's bootargs, `sr=0`, the install's two variables removed. OpenWrt stays in slot 0; nothing is written back there |
+
+### 2026-11-15, late -- the C-200
+
+A C-200 on Arista 11.0.0-36.19 was installed over the network on the first
+attempt (6.5 minutes), switched back to Arista by the tool, and installed
+again. `test-c200.py` (17 checks) holds its path in place. With it every
+model in the table installs over the network.
+
+| # | change | why |
+|---|---|---|
+| 65 | the C-200's path | 11.0.0 has no `radartool`; the upgrade wizard is the way in (`root_order`). Its flash is the C-230's scheme with its NOR kernels under the names `HL_backup0/1`, and `fdt_high` is left at Arista's own. Its image carries no installer script, so the tool makes the steps (`install_by: ubiformat`): it checks from the RAM installer that slot 1 holds a UBI and its kernel partition an image, writes the boot command first (OpenWrt, then Arista in slot 1), formats slot 0 with the factory image, and reads the `kernel` and `rootfs` volumes back against the release's install sums |
+| 66 | a NOR partition mounted for writing is saved as read | Arista keeps CONFIG as jffs2, mounted read-write; like the running slot, two reads of it need not agree |
+
+Seen and left alone: `test_releases.py` writes its made-up `index.json` and
+`release.json` (and, once, made-up images) into the real release cache when a
+check gets as far as a fetch. The tool verifies every file against the
+release's checksums, so it refused them; the test needs a cache of its own.
+
+A lesson from the same evening, on the W-318: a unit whose `config` password
+was changed cannot be entered at all, and with Arista running there is then no
+way back over the network. Before a unit is sent to Arista for a test, give it
+a way home that needs no login. On the W-118 that was a boot counter in the
+environment (Arista for three boots, then OpenWrt again), removed afterwards.
+
 ## What is proven, and on what
 
 - **C-230:** install and revert, both end to end, twice (2026-10-25).
@@ -133,16 +183,33 @@ Seen and left alone:
   answering 21 minutes after the start: four radios, boot command with the
   Arista fallback, `pri=1`. Also `--verify-only`. The menu and the yes/no were
   seen on the unit but not answered there (no terminal to type on).
-- **Not yet, with 2.0:** a restore on any unit; `--update` on a unit; an
+- **W-118 (8.7.1-03.2), 2026-11-15:** `--verify-only`; a full install with
+  release 157 twice (6 and 6.5 minutes: 13 partitions saved, the zImage
+  initramfs by TFTP in 8 s, one `fw_setenv`, `sysupgrade -n`; three radios,
+  Arista's second slot byte-identical to its backup afterwards); and the way
+  back to Arista once (one boot-command write, Arista up 2.5 minutes later).
+- **W-318 (18.0.0-176.12), 2026-11-15:** `--verify-only`; the install by the
+  image's script on a running RAM installer (`--installer-at`); the way back to
+  Arista (one boot-command write, Arista up from slot 1); and a full unattended
+  `--install --yes` from Arista with release 42 (6.7 minutes: 26 partitions
+  saved, 154 MiB; one fetch; dry run, write, read-back). Slot 1's kernel and
+  system were byte-identical to their backup afterwards.
+- **C-200 (11.0.0-36.19), 2026-11-15:** `--verify-only`; a full unattended
+  `--install --yes` with release 157 twice (6.5 minutes: 24 partitions saved,
+  66 MiB; one fetch; boot command, format, volumes read back; two radios), and
+  the way back to Arista once (one boot-command write, Arista up from slot 1).
+  Slot 1's kernel was byte-identical to its backup afterwards.
+- **Not yet, with 2.0:** a restore on a C-230, C-260, C-360 or C-460; `--update` on a unit; an
   install on a C-230, C-260 or C-460 (their steps are 1.3's, called in the same
   order).
 - **Not yet:** a unit whose
   factory password was changed (the question for it is untested on hardware);
   a full install on firmware 16.x end to end (its root shell is confirmed:
   `radartool params ;sh; radio 0` dropped a C-260 at 16.1.0-51.6 to BusyBox
-  ash, 2026-11-04); and a way into Arista's firmware on a W-318, W-118 or
-  C-200 (on a W-118 at 8.7.1, `radartool` refuses shell characters; its
-  upgrade wizard has the same eval as the C-230's and has not been tried).
+  ash, 2026-11-04). (A unit
+  whose password was changed was met on the W-318: nothing over the network
+  gets in, six power cuts in 30 minutes did not reset it, and its reset
+  button did.)
 
 ## Deliberate design points (do not "simplify" these away)
 

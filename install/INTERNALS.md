@@ -145,11 +145,12 @@ can RAM-boot the installer by hand without writing anything.
 
 - **Models.** Install and revert with no console: the C-230, C-260 and C-460,
   each proven on a real unit, and the C-360 (installed on a unit; its revert
-  not yet run on one). The W-318, W-118 and C-200 are identified, updated when they already
-  run OpenWrt, and their images fetched and verified, but their first install
-  is by console ([BY-HAND.md](BY-HAND.md)): a way into Arista's firmware has
-  not been confirmed on a unit of any of them (on the W-118, firmware 8.7.1,
-  `radartool` refuses shell characters). `MODELS` in the script holds the per-model facts
+  not yet run on one), and the W-118, W-318 and C-200 (each installed twice and
+  switched back to Arista once on a unit). A model whose way into Arista's
+  firmware has not been proven on a unit is marked `field_install: False`:
+  it is identified, updated when it already runs OpenWrt, its images fetched
+  and verified, and its first install refused with the by-hand page
+  ([BY-HAND.md](BY-HAND.md)). No model is marked so today. `MODELS` in the script holds the per-model facts
   (FIT config, slot and environment partition names, installer name), each taken
   from that model's own firmware.
 - **Arista firmware versions.** The way in was read in, and run on, C-230
