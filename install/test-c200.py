@@ -242,6 +242,8 @@ def revert():
 payload, run = revert()
 check("back to Arista: its own boot command and slot 1",
       "bootcmd run ubootscript" in payload and "\npri 1\n" in payload, payload)
+check("pri is set to the kept slot and not removed again in the same write, and Arista's bootargs follow it",
+      payload.count("\npri") == 1 and "\npri 1\n" in payload and "\nbootargs A1\n" in payload, payload)
 check("every variable the install added is removed",
       all(("\n%s\n" % n) in payload for n in ("owrt_args", "owrt_parts", "owrt_load", "owrt_boot",
                                               "arista_unset", "arista_args", "arista_boot")), payload)

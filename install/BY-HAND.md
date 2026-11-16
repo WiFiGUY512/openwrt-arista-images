@@ -19,6 +19,7 @@ the flash, write OpenWrt to the first slot, and set the boot command once.
 | C-200 | [c200/INSTALL.md](https://github.com/WiFiGUY512/openwrt-arista/blob/main/c200/INSTALL.md) |
 | W-318 | [w318/INSTALL.md](https://github.com/WiFiGUY512/openwrt-arista/blob/main/w318/INSTALL.md) |
 | W-118 | [w118/INSTALL.md](https://github.com/WiFiGUY512/openwrt-arista/blob/main/w118/INSTALL.md) (its console is a header inside the case) |
+| C-130 | no page yet (its build is not published yet either) |
 
 A halfway route: start OpenWrt from memory by hand (steps 1 and 2 below), then
 let the network installer do the rest from your PC with

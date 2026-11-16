@@ -1043,7 +1043,9 @@ MODELS = {
         "revert_env": (("bootargs", "console=ttyMSM0,115200n8 root=/dev/mmcblk0p2 rootwait rw"),
                        ("pri", "1"), ("sr", "0")),
         "revert_note": ("Arista's firmware starts again from its second slot, where the install",
-                        "left it.  OpenWrt stays in the first slot, no longer started."),
+                        "left it.  OpenWrt stays in the first slot, no longer started.",
+                        "That copy keeps its own settings and may not take the login the other",
+                        "one did; the AP's reset button brings back config / config."),
     },
     "w118": {
         "name": "W-118",
@@ -1140,7 +1142,73 @@ MODELS = {
         "revert": "bootcmd",
         "revert_env": (("pri", "1"),),
         "revert_note": ("Arista's firmware starts again from its second slot, where the install",
-                        "left it.  OpenWrt stays in the first slot, no longer started."),
+                        "left it.  OpenWrt stays in the first slot, no longer started.",
+                        "That copy keeps its own settings and may not take the login the other",
+                        "one did; the AP's reset button brings back config / config."),
+    },
+    "c130": {
+        "name": "C-130",
+        # The port's device is the community one it builds on, "mojo_c-130"
+        # (board name mojo,c-130): the image names carry that, and the RAM
+        # installer and the installed system answer to it.
+        "target": "ipq806x/generic",
+        "device": "mojo_c-130",
+        "board": "mojo,c-130",
+        "initramfs": "initramfs-fit-uImage.itb",
+        "image": "sysupgrade",
+        # Its flash, as read on a unit on Arista 13.0.2-28.402 (2026-11-15): a
+        # 128 MiB NAND cut into four 32 MiB partitions, two per slot (rootfs+opt,
+        # rootfs2+opt2), with nothing spare; and seventeen partitions on the SPI
+        # NOR adding up to 0x1F90000, the two 5 MiB kernels and a 256 KiB
+        # environment among them.  The way in is radartool.
+        "slot0": ("rootfs",),
+        "slot1": ("rootfs2",),
+        "slot_size": 0x2000000,
+        "appsblenv": ("0:APPSBLENV", "0:appsblenv"),
+        "need_nor": ("0:HLOS1", "0:hlos1"),
+        "need_env": ("bootcmd", "ba0", "ba1", "ubootscript"),
+        "nor_total": 0x1F90000,
+        "root_order": ("radartool",),
+        # U-Boot 2012.07 (a 2022 build): the image is fetched to 0x44000000 and
+        # started with a bare bootm (its FIT's default configuration), fdt_high
+        # left alone.  The boot loader unpacks the kernel to 0x42208000 itself, so
+        # the unpacked kernel has to end below the file being read (and below
+        # the 6 MiB the port reserves at 0x44000000): 20.8 MiB of the 31.4 there
+        # are in the first build.  It has no 'sleep' command, so neither wait is
+        # written (0); the fetch was seen 14 s after a restart without one (a
+        # probe with marker files, 2026-11-15) and in the first RAM boot.
+        "fit_cfg": None,
+        "load_addr": "0x44000000",
+        "fdt_high": None,
+        "net_helper": True,
+        "net_tries": 3,
+        "net_settle": 0,
+        "retry_sleep": 0,
+        # The install is the W-118's shape: one fw_setenv, then OpenWrt's own
+        # sysupgrade -n.  OpenWrt takes Arista's slot 0 (rootfs + opt, 64 MiB,
+        # as one UBI); slot 1 (rootfs2 + opt2) and both kernels in NOR are never
+        # written.  pri=1 makes Arista's own boot, the fallback, use slot 1.
+        "install_env": (
+            ("owrt_boot", "setenv mtdids nand0=nand0 && setenv mtdparts mtdparts=nand0:64m(ubi) && "
+                          "ubi part ubi && ubi read 0x44000000 kernel && bootm 0x44000000"),
+            ("arista_boot", "setenv mtdids; setenv mtdparts; if test ${pri} = 0; then "
+                            "setenv bootargs ${ba0}; else setenv bootargs ${ba1}; fi; "
+                            "run ubootscript"),
+            ("bootcmd", "run owrt_boot; run arista_boot"),
+            ("pri", "1"),
+        ),
+        "install_where": "NAND slot 0: Arista's rootfs and opt partitions, 64 MiB together",
+        "install_keeps": "Slot 1 (rootfs2, opt2) and both kernels in NOR are not written; "
+                         "Arista's copy there is the fallback (pri=1).",
+        "pri_note": "Arista calls slot 0 its primary on this unit, so the system that runs now is "
+                    "the one the install replaces; the copy in slot 1 is what is kept.",
+        # Back to Arista: its kept copy in slot 1, by the boot command alone.
+        "revert": "bootcmd",
+        "revert_env": (("pri", "1"),),
+        "revert_note": ("Arista's firmware starts again from its second slot, where the install",
+                        "left it.  OpenWrt stays in the first slot, no longer started.",
+                        "That copy keeps its own settings and may not take the login the other",
+                        "one did; the AP's reset button brings back config / config."),
     },
     "c460": {
         "name": "C-460",
@@ -1736,7 +1804,7 @@ def _connect_once(host, user=None, password=None):
       try:
         con = m.ssh_open(host, o_user, o_pass, timeout=10)
         board = m.ssh_exec(con, "cat /tmp/sysinfo/board_name 2>/dev/null", 20)[0].strip()
-        if board.startswith("arista,"):
+        if port_board(board):
             rel = m.ssh_exec(con, "cat /etc/openwrt_release 2>/dev/null | tr '\\n' ' '", 20)[0]
             mac = m.ssh_exec(con, "cat /sys/class/net/br-lan/address 2>/dev/null", 20)[0].strip()
             model = board.split(",")[-1].replace("-", "")
@@ -2529,9 +2597,14 @@ def netboot_env(pc_ip, ap_ip, itb_name, cfg, load="0x60000000",
         # manual boots, 2026-11-12) needs to span.  "tftpboot && bootm" boots on
         # the first success; on a miss it sleeps retry_sleep and the next run
         # tries again.
-        out.append(("owrt_try", "tftpboot %s %s && %s; sleep %d"
-                    % (load, itb_name, boot, retry_sleep)))
-        fetch = head + "sleep %d; " % net_settle + "run owrt_try; " * net_tries + "reset"
+        # A boot loader without 'sleep' (the C-130's) gets neither wait: 0 for
+        # net_settle and retry_sleep leaves the command out instead of writing
+        # one it would answer with "Unknown command".  Its tftpboot waits for
+        # the link by itself (first fetch 14 s after the restart, 2026-11-15).
+        out.append(("owrt_try", "tftpboot %s %s && %s" % (load, itb_name, boot)
+                    + ("; sleep %d" % retry_sleep if retry_sleep else "")))
+        fetch = (head + ("sleep %d; " % net_settle if net_settle else "")
+                 + "run owrt_try; " * net_tries + "reset")
         out.append(("owrt_nb", fetch))
     else:
         # The proven inline form (C-230/C-260): a settle, net_tries tftpboot calls,
@@ -4009,15 +4082,20 @@ def do_restore_bootcmd(run, who, d):
     pri = have.get("pri", "0").strip()
     args = have.get("ba0" if pri == "0" else "ba1")
     lines = ["bootcmd %s" % d.get("stock_bootcmd", "run ubootscript")]
-    if d.get("revert_env"):
-        # A model whose install took slot 0 and kept slot 1 (the W-318): the
-        # values that make Arista's own boot choose the kept slot.
+    setting = dict(d.get("revert_env", ()))
+    if setting:
+        # A model whose install took slot 0 and kept slot 1 (the W-318, C-200,
+        # C-130): the values that make Arista's own boot choose the kept slot.
         lines += ["%s %s" % (n, v) for n, v in d["revert_env"]]
-        pri = dict(d["revert_env"]).get("pri", pri)
-    elif args:
+        pri = setting.get("pri", pri)
+        args = have.get("ba0" if pri == "0" else "ba1")
+    if args and "bootargs" not in setting:
         lines.append("bootargs %s" % args)
     for name in tuple(n for n, _v in d.get("install_env", ())) + tuple(d.get("revert_names", ())):
-        if name != "bootcmd" and name in have:
+        # Not a variable this same write sets: the C-200's install sets pri, and
+        # removing every name it set took pri out again right after putting it
+        # back (2026-11-15; Arista still started, with pri undefined).
+        if name != "bootcmd" and name not in setting and name in have:
             lines.append(name)
     for name in ("mtdids", "mtdparts"):
         if name in have:
@@ -4183,7 +4261,8 @@ def find_ap(prefix, timeout, want_ram=None, skip=(), mac=None):
 # on a unit.  Only a host with one of these is ever asked who it is: a factory
 # login is never tried against the rest of somebody's network.
 AP_OUIS = ("30:86:2d", "e4:d1:24", "e0:1c:a7",
-           "88:b1:e1")              # the W-118's (the older Mojo block)
+           "88:b1:e1",              # the W-118's (the older Mojo block)
+           "00:11:74")              # a C-130's (the AirTight block, older still)
 
 
 def _private(ip):
@@ -4284,6 +4363,12 @@ def parse_device_info(text):
     return info
 
 
+def port_board(board):
+    """Whether a board name is one of this port's: arista,<model>, or the
+    community name the C-130's device keeps (mojo,c-130)."""
+    return (board or "").startswith(("arista,", "mojo,"))
+
+
 def model_key(name):
     """'C-260' or 'arista,c-260' -> 'c260' (whether or not the tool knows it)."""
     return re.sub(r"[^a-z0-9]", "", (name or "").split(",")[-1].lower())
@@ -4319,7 +4404,7 @@ def _probe_openwrt(ip, user, password, timeout):
                                 "echo D=$DISTRIB_DESCRIPTION; echo V=$DISTRIB_RELEASE", 20)
         got = dict(l.strip().split("=", 1) for l in text.splitlines() if re.match(r"^[BRDV]=", l.strip()))
         board = got.get("B", "")
-        if not board.startswith("arista,"):
+        if not port_board(board):
             return None
         key = model_key(board)
         return {"ip": ip, "kind": "openwrt", "board": board, "model": key if key in MODELS else None,
@@ -4650,7 +4735,7 @@ def check_installer(ip, timeout=8, mac=None):
         text, _ = m.ssh_exec(con, "cat /tmp/sysinfo/board_name 2>/dev/null; "
                                   "awk '$2 == \"/\" {print $3; exit}' /proc/mounts", 20)
         lines = [l.strip() for l in text.splitlines() if l.strip()]
-        if not lines or not lines[0].startswith("arista,"):
+        if not lines or not port_board(lines[0]):
             con.close()
             return None
         got_mac = board_mac(con)
@@ -5036,7 +5121,7 @@ def main():
         lines = [l.strip() for l in text.splitlines() if l.strip()]
         board = lines[0] if lines else "?"
         root = lines[1] if len(lines) > 1 else "?"
-        if not board.startswith("arista,") or root not in RAM_ROOTS:
+        if not port_board(board) or root not in RAM_ROOTS:
             m.die("%s is not a RAM installer (board %r, root %r)" % (a.installer_at, board, root))
         model = model_key(board)
         if model not in MODELS:
@@ -5078,7 +5163,8 @@ def main():
         m.die("this PC has no address towards the AP")
     prefix = host.rsplit(".", 1)[0]
     stock = who["kind"] == "stock"
-    can_install = field_install(model)
+    no_image = bool(mdl.get("no_image"))        # known and reachable, but no OpenWrt build yet
+    can_install = field_install(model) and not no_image
     if who.get("ram"):
         m.die("%s is a RAM installer that is already running.\n"
               "Finish its install with:  --installer-at %s" % (host, host))
@@ -5093,7 +5179,12 @@ def main():
               "(use --install).")
     if action in ("backup", "verify") and not stock:
         m.die("this AP already runs OpenWrt, so there is no factory firmware to read from it.")
-    if stock and not can_install:
+    if stock and no_image and action not in ("backup", "verify"):
+        m.die("there is no OpenWrt build for the %s yet, so it cannot be installed.\n"
+              "Nothing was changed.  Its own firmware can be saved to this PC meanwhile:\n"
+              "  python %s --host %s --backup-only"
+              % (mdl["name"], os.path.basename(sys.argv[0]) or "arista-field.py", host))
+    if stock and not can_install and not no_image:
         refuse_unsupported(model)
     PURPOSE = "update" if (action == "update" or (action is None and not stock)) else "install"
     asked_for = PURPOSE
@@ -5113,7 +5204,8 @@ def main():
               "See what each release carries with --list-releases."
               % (mdl["name"], " on the accepted channel" if a.channel == "stable" else ""))
     if rel == {}:
-        tell("No published build has the %s yet, so there is nothing to update it to." % mdl["name"])
+        tell("No published build has the %s yet%s." % (
+            mdl["name"], "" if stock else ", so there is nothing to update it to"))
         rel = None
     if ahead:
         if action == "update":

@@ -153,16 +153,57 @@ two stopped before any write, and each is worth a line:
 | 67 | the PC's address is the one on the AP's own network | the address was taken from the system's route towards the AP. A VPN on the PC came up during a run and took that route; the AP was told to post its backup to the VPN's address and could not reach it. An address of the PC on the AP's /24 is now preferred, and the failure names the address used and `--pc-ip` |
 | 68 | FAILSAFE, and addresses, in the guide | a W-318 on 18.0.0 went into Arista's failsafe mode after an evening of warm restarts (six power cuts had not done it); the tool's check stopped the run, and `failsafe recover` + `y` in the AP's CLI took it out. The guide's table now says so, and that an AP's address can change across an install (Arista's firmware asks DHCP by plain MAC, OpenWrt by an RFC 4361 client id) |
 
-Seen and left alone: `test_releases.py` writes its made-up `index.json` and
-`release.json` (and, once, made-up images) into the real release cache when a
-check gets as far as a fetch. The tool verifies every file against the
-release's checksums, so it refused them; the test needs a cache of its own.
+### 2026-11-15, near midnight -- a C-130, as far as it goes without an image
+
+| # | change | why |
+|---|---|---|
+| 69 | a model can be known before it has a build | `no_image`: the C-130 (Arista 13.0.2, way in by `radartool`) is checked and its firmware saved (`--verify-only`, `--backup-only`), and an install is refused with "there is no OpenWrt build for the C-130 yet". Its layout is two slots of two 32 MiB NAND partitions each (`rootfs`+`opt`, `rootfs2`+`opt2`) and a 256 KiB environment |
+| 70 | discovery looks at the AirTight MAC prefix | `00:11:74`, a C-130's; older than the W-118's block |
+
+Learned on that unit, for when it has an image: its U-Boot (2012.07, a 2022
+build) has no `sleep` command, so the settle before the first fetch is an
+unknown command there and is skipped; the fetch worked 14 s after the restart
+without it (a probe that only fetched marker files, then reset). Its kernels
+are FIT images, and a reset pressed while it is still starting does not take.
+
+Seen that night and fixed the next morning (item 76): `test_releases.py` wrote
+its made-up `index.json` and `release.json` (and, once, made-up images) into
+the real release cache when a check got as far as a fetch. The tool verifies
+every file against the release's checksums, so it refused them.
 
 A lesson from the same evening, on the W-318: a unit whose `config` password
 was changed cannot be entered at all, and with Arista running there is then no
 way back over the network. Before a unit is sent to Arista for a test, give it
 a way home that needs no login. On the W-118 that was a boot counter in the
 environment (Arista for three boots, then OpenWrt again), removed afterwards.
+
+### 2026-11-16, morning -- the C-130 installs
+
+With a first image for it (the port's `mojo_c-130` device, build 201, not yet
+published), a C-130 on Arista 13.0.2-28.402 was started from RAM with
+`--ramboot`, restarted to Arista, and then installed with `--install --yes`
+on the first attempt, in 7 minutes. `test-c130.py` holds its path in place.
+
+| # | change | why |
+|---|---|---|
+| 71 | the C-130's path (replaces item 69's "no build yet") | the W-118's shape: one `fw_setenv`, then OpenWrt's own `sysupgrade -n`. OpenWrt takes Arista's slot 0 (`rootfs` + `opt`, as one 64 MiB UBI); slot 1 and both kernels in NOR are never written, and `pri=1` makes Arista's own boot, kept as the fallback, use slot 1. The boot command reads OpenWrt's kernel from the UBI, and on any failure clears OpenWrt's partition table and runs Arista's boot |
+| 72 | a unit answering `mojo,c-130` is one of this port's | the port keeps the community device name, so the image names, the RAM installer and the installed system carry `mojo`, not `arista` (`port_board()`) |
+| 73 | no `sleep` in the one-time network boot for this model | its boot loader has none; `net_settle` and `retry_sleep` of 0 now leave the command out. The fetch came on the first try both times |
+| 74 | the image is fetched to 0x44000000, and why that is enough | the boot loader unpacks the kernel to 0x42208000 itself, so the unpacked kernel must end below the file being read (and below a region the port reserves at 0x44000000): 20.8 MiB of 31.4 in this build. A larger RAM image would need to shrink, not move |
+| 75 | back to Arista on the C-200 no longer removes `pri` | the write set `pri 1` and then deleted `pri` in the same script, because `pri` is also among the install's variables. The C-200 came up on Arista all the same on 2026-11-15; which slot the boot loader chose without it was not looked at. A name that is being set is now never also removed, and `bootargs` follows the slot being set (`test-c200.py`) |
+| 76 | the kept copy of Arista has its own settings | sent to Arista's slot 1 through the install's own fallback, the C-130 started there (a slightly older build of 13.0.2) and refused `config` / `config`, which the copy in slot 0 had accepted all night. The W-318 did the same on 2026-11-15. The "switch back" question on the W-318, C-200 and C-130 now says so, and that the reset button brings the factory login back |
+| 77 | `test_releases.py` has its own release cache | it points the tool's default cache at a scratch folder before any check runs |
+
+Read on that unit before the install, because the kept slot depends on it:
+Arista 13.x can rewrite the *other* slot by itself, from its management
+server, but only when the boot environment says `ps=1`. That is set by the
+boot loader when a slot's kernel fails its check or its retries run out, and by
+Arista when its own running system fails an integrity check. The install sets
+`pri` and never `ps`, so a fallback boot leaves OpenWrt alone.
+
+The way home that needs no login (see the lesson above) was a three-boot
+counter again, and it was needed: with the login refused, nothing over the
+network gets into that copy of Arista.
 
 ## What is proven, and on what
 
@@ -208,6 +249,16 @@ environment (Arista for three boots, then OpenWrt again), removed afterwards.
   66 MiB; one fetch; boot command, format, volumes read back; two radios), and
   the way back to Arista once (one boot-command write, Arista up from slot 1).
   Slot 1's kernel was byte-identical to its backup afterwards.
+- **C-130 (13.0.2-28.402, running from slot 0), 2026-11-16:** `--ramboot` (the
+  12 MiB initramfs FIT by TFTP on the first fetch, a bare `bootm` at
+  0x44000000; a plain reboot returned it to Arista); a full unattended
+  `--install --yes` from a local build (7 minutes: 21 partitions saved,
+  three kept as read; one `fw_setenv`; `sysupgrade -n`; three radios). Every
+  kept partition but the environment was byte-identical to its backup
+  afterwards: slot 1, both kernels, the calibration, the boot loaders. The
+  fallback was then run on purpose: Arista started from slot 1. Not yet on
+  this model: the switch back with the tool, a second install, and an install
+  from a published release.
 - **Not yet, with 2.0:** a restore on a C-230, C-260, C-360 or C-460; `--update` on a unit; an
   install on a C-230, C-260 or C-460 (their steps are 1.3's, called in the same
   order).

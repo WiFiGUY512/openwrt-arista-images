@@ -270,6 +270,26 @@ check("only save the firmware: no question, no release, no installer, and the AP
                                  "pty_clean"]
       and "nothing on the AP was changed" in s.out, (s.calls, s.out[-300:]))
 
+# 4b. a model with a proven way in but no OpenWrt build yet (the C-130 for one
+#     night, 2026-11-15): it is not installed, and its firmware can still be saved.
+STOCK_C130 = dict(STOCK_C260, model="c130", name="C-130", mac="00:11:74:00:00:07")
+af.MODELS["c130"]["no_image"] = True     # as it was until its build existed; the stop is what is tested
+s = Script(STOCK_C130, [], argv=["--host", "192.168.1.63", "--install", "--yes"]).run()
+check("C-130, --install: stopped before any login for a shell, and says its firmware can be saved",
+      s.died and not (set(s.calls) & WRITERS) and "no OpenWrt build for the C-130 yet" in s.out
+      and "--backup-only" in s.out and "Nothing was changed" in s.out, (s.calls, s.out[-400:]))
+s = Script(STOCK_C130, [], argv=["--host", "192.168.1.63"]).run()
+check("C-130, no options: the same stop, with no menu that offers an install",
+      s.died and not (set(s.calls) & WRITERS) and "no OpenWrt build for the C-130 yet" in s.out,
+      (s.calls, s.out[-400:]))
+s = Script(STOCK_C130, [], argv=["--host", "192.168.1.63", "--backup-only", "--yes"]).run()
+check("C-130, --backup-only: checked and saved, no release fetched, no installer started",
+      not s.died and s.calls == ["probe_host", "check_ports", "connect", "verify_stock", "download_firmware",
+                                 "pty_clean"]
+      and "nothing on the AP was changed" in s.out, (s.calls, s.out[-300:]))
+
+del af.MODELS["c130"]["no_image"]
+
 # 5. a model with no confirmed way in is refused before anything.  Every model
 #    in the table installs now (the C-200 was the last, 2026-11-15), so one is
 #    marked as not installable for this check: the refusal is still what a new

@@ -146,7 +146,9 @@ can RAM-boot the installer by hand without writing anything.
 - **Models.** Install and revert with no console: the C-230, C-260 and C-460,
   each proven on a real unit, and the C-360 (installed on a unit; its revert
   not yet run on one), and the W-118, W-318 and C-200 (each installed twice and
-  switched back to Arista once on a unit). A model whose way into Arista's
+  switched back to Arista once on a unit), and the C-130 (installed once on a
+  unit, its fallback to Arista's second slot seen to start; the switch back
+  with the tool not yet run on one, and no published build carries it yet). A model whose way into Arista's
   firmware has not been proven on a unit is marked `field_install: False`:
   it is identified, updated when it already runs OpenWrt, its images fetched
   and verified, and its first install refused with the by-hand page

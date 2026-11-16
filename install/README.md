@@ -80,6 +80,7 @@ page or with `sysupgrade`, or run this tool again and it offers the update.
 | W-118 | yes | installed on a unit twice and switched back to Arista once (Arista 8.7.1); OpenWrt goes into flash Arista does not use, so Arista's firmware is never replaced |
 | W-318 | yes | installed on a unit twice and switched back to Arista once (Arista 18.0.0); Arista's copy in the second slot is kept |
 | C-200 | yes | installed on a unit twice and switched back to Arista once (Arista 11.0.0); Arista's copy in the second slot is kept |
+| C-130 | yes | installed on a unit (Arista 13.0.2), once its first build is published; Arista's copy in the second slot is kept and was seen to start; switching back with the tool has not been run on one yet |
 
 An AP of any of these models that already runs this OpenWrt port can be
 **updated** with the same tool.
@@ -117,6 +118,13 @@ AP's own firmware.
 Run the same command. For an AP whose firmware this PC saved, the menu offers
 "Put Arista's firmware back". It writes the saved slot and boot settings back
 and checks them byte for byte.
+
+On the W-118, W-318, C-200 and C-130 the same choice is quicker: it changes
+the boot setting only, and the AP starts the copy of Arista's firmware the
+install left in place. On the W-318, C-200 and
+C-130 that is the copy in the second slot, and it keeps its own settings: if
+it refuses `config` / `config`, press the AP's reset button once it has
+finished starting.
 
 ## If something goes wrong
 
