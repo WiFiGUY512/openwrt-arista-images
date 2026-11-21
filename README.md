@@ -6,6 +6,12 @@ on an AP over the network. Not affiliated with Arista Networks. Installing
 replaces part of the AP's firmware, at your own risk; the installer saves the
 AP's own firmware first and can put it back.
 
+> **There are two repositories.**
+> - **This one, `openwrt-arista-images`, is where you install from:** the
+>   network installer (in `install/`) and the built images (the releases).
+> - **[openwrt-arista](https://github.com/WiFiGUY512/openwrt-arista) is the
+>   source code** the images are built from. You do not need it to install.
+
 ## Install
 
 On a PC on the same network as the AP. No console cable.
