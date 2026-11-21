@@ -43,6 +43,7 @@ import logging
 import os
 import re
 import secrets
+import shutil
 import socket
 import struct
 import subprocess
@@ -558,6 +559,132 @@ def fetch_cmd(a):
         tell("This tool does not install the %s over the network yet.  By hand:"
              % MODELS[model]["name"])
         tell("  %s" % (BY_HAND % model))
+
+
+# --- the C-360's USB stick -------------------------------------------------------------
+# The stick carries what the network install sends over the wire: the RAM
+# installer and factory.ubi, with the checksums arista-c360-install wants.  A
+# stick install still starts at the console (U-Boot stops only for its key
+# string there), so this is for an AP whose network cannot be used.  Arista's
+# U-Boot leaves the USB port unpowered: the first two commands of the line drive
+# its VBUS pin, gpio29, high, as Arista's system does.
+STICK_MODEL = "c360"
+STICK_BACKUP_MIB = 180          # one unit's flash backup on the stick, gzipped
+STICK_FREE_MIB = 512            # arista-c360-install starts a backup only above this
+
+
+def stick_uboot_line(mdl):
+    return ("mw.l 0x0101D004 0x2; mw.l 0x0101D000 0x201; "
+            "usb start; fatload usb 0:1 %(load)s c360/initramfs.itb && "
+            "setenv fdt_high 0x4A3E0000 && "
+            "setenv bootargs console=ttyMSM0,115200n8 rootwait panic=0 && "
+            "bootm %(load)s#%(cfg)s" % {"load": mdl["load_addr"], "cfg": mdl["fit_cfg"]})
+
+
+def stick_readme(mdl, tag):
+    text = (
+        "OpenWrt installer for the Arista C-360\n"
+        "Release %s, put here by arista-field.py.\n\n"
+        "On the AP's console (RJ-45 rollover, RS-232, 115200 8N1), with this drive\n"
+        "in the AP's USB port:\n"
+        "1. Power the AP on and paste the U-Boot key until IPQ807x# appears:\n"
+        "     s6.D5r4Gnb89ZEWSW6Kq.\n"
+        "2. Paste this line (nothing is saved; never type saveenv):\n"
+        "     %s\n"
+        "3. When OpenWrt's console is up, run:\n"
+        "     arista-c360-install\n"
+        "4. When it prints C360-INSTALL-RESULT: OK installed, type reboot.\n\n"
+        "Each unit's flash backup is written here, to backup-<MAC>-<time>/,\n"
+        "gzipped (about %d MiB). Keep them: the ART partition in each holds that\n"
+        "unit's radio calibration and exists nowhere else.\n"
+        % (tag, stick_uboot_line(mdl), STICK_BACKUP_MIB))
+    return text.replace("\n", "\r\n").encode()
+
+
+def stick_filesystem(path):
+    """The file system of a Windows drive root ('FAT32', 'exFAT', 'NTFS'), or
+    None where it cannot be told (another system, or a folder that is not a
+    drive's root)."""
+    if os.name != "nt":
+        return None
+    drive, tail = os.path.splitdrive(os.path.abspath(path))
+    if not drive or tail.strip("\\/"):
+        return None
+    try:
+        import ctypes
+        name = ctypes.create_unicode_buffer(64)
+        ok = ctypes.windll.kernel32.GetVolumeInformationW(
+            ctypes.c_wchar_p(drive + "\\"), None, 0, None, None, None, name, len(name))
+        return name.value if ok else None
+    except Exception:
+        return None
+
+
+def make_stick_cmd(a):
+    """--make-stick DIR: the C-360's installer files onto a FAT32 USB drive (or
+    into a folder to copy to one), from a release, verified, with no AP."""
+    mdl = MODELS[STICK_MODEL]
+    dest_root = os.path.abspath(a.make_stick)
+    if not os.path.isdir(dest_root):
+        die("%s is not there.  Give the USB drive's own folder (on Windows a drive "
+            "such as E:\\), with the drive plugged in." % a.make_stick)
+    fs = stick_filesystem(dest_root)
+    if fs and not fs.upper().startswith("FAT"):
+        die("the drive %s is formatted as %s, which the AP's boot loader cannot read.\n"
+            "Format it as FAT32 and run this again.  Nothing was copied."
+            % (a.make_stick, fs))
+    d, tag = fetch_release(a.tag, [STICK_MODEL], os.path.abspath(a.files), a.channel)
+    names = files_for(STICK_MODEL, "install")
+    itb, ubi = os.path.join(d, names["itb"]), os.path.join(d, names["ubi"])
+    # the release's install sums: factory.ubi, and the kernel and rootfs volumes
+    # inside it, which the installer compares slot 0 against after writing it
+    with open(os.path.join(d, names["sums"])) as f:
+        install_sums = [l.strip() for l in f if l.strip()]
+    listed = dict((l.split()[1], l.split()[0]) for l in install_sums if len(l.split()) == 2)
+    if listed.get("factory.ubi") != sha256_file(ubi):
+        die("%s does not match the release's %s; delete %s and run again"
+            % (names["ubi"], names["sums"], d))
+    if not all(any(" volume:%s " % v in l for l in install_sums) for v in ("kernel", "rootfs")):
+        die("the release's %s has no checksums for the kernel and rootfs volumes, which "
+            "the installer on the AP needs.  Take a newer release." % names["sums"])
+    sums = "\n".join(["%s  initramfs.itb" % sha256_file(itb)] + install_sums) + "\n"
+
+    dest = os.path.join(dest_root, "c360")
+    os.makedirs(dest, exist_ok=True)
+    for name, src, data in (("initramfs.itb", itb, None), ("factory.ubi", ubi, None),
+                            ("SHA256SUMS", None, sums.encode()),
+                            ("README.txt", None, stick_readme(mdl, tag))):
+        out = os.path.join(dest, name)
+        status("copying %s" % name, log=False)
+        if src:
+            shutil.copyfile(src, out)
+            want = sha256_file(src)
+        else:
+            with open(out, "wb") as f:
+                f.write(data)
+            want = hashlib.sha256(data).hexdigest()
+        if sha256_file(out) != want:
+            die("the copy of %s in %s does not match what was written.  The drive may "
+                "be failing; try another one." % (name, dest))
+    try:
+        free = shutil.disk_usage(dest_root).free >> 20
+    except OSError:
+        free = None
+    tell("")
+    tell("Done.  The C-360 installer files of release %s are in %s" % (tag, dest))
+    if free is not None:
+        room = 0 if free <= STICK_FREE_MIB else (free - STICK_FREE_MIB - 1) // STICK_BACKUP_MIB + 1
+        tell("  Free space: %d MiB, room for the flash backups of about %d AP%s."
+             % (free, room, "" if room == 1 else "s"))
+        if room == 0:
+            tell("  The installer on the AP saves each AP's firmware to this drive first and")
+            tell("  wants more than %d MiB free: make room before using it." % STICK_FREE_MIB)
+    tell("")
+    tell("  Next:  a stick install starts at the AP's console cable; the steps are in")
+    tell("         %s on the drive." % os.path.join("c360", "README.txt"))
+    tell("  Note:  with a working network, the network install (this tool with no")
+    tell("         options) needs no cable and no drive.  No AP has been installed")
+    tell("         from a stick yet.")
 
 
 def check_sums(d, names):
@@ -5038,6 +5165,10 @@ def main():
     ap.add_argument("--fetch", metavar="MODEL",
                     help="download and verify a model's newest release files "
                          "(%s) with no AP, and stop" % ", ".join(sorted(MODELS)))
+    ap.add_argument("--make-stick", metavar="DIR",
+                    help="C-360 only: put its installer files on a FAT32 USB drive (DIR is "
+                         "the drive, such as E:, or a folder to copy to one) with no AP, "
+                         "and stop.  A stick install still needs the console cable")
     ap.add_argument("--files", default=RELEASES, help="release cache (default: %(default)s)")
     ap.add_argument("--backup-dir", help="where to save the firmware (default backups/<model>-<mac>)")
     ap.add_argument("--backup-only", action="store_true", help="save the AP's firmware and stop")
@@ -5081,6 +5212,9 @@ def main():
         return
     if a.fetch:
         fetch_cmd(a)
+        return
+    if a.make_stick:
+        make_stick_cmd(a)
         return
     interactive = sys.stdin.isatty() and not a.yes
     if not a.host and not a.installer_at and not interactive:

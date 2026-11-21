@@ -193,6 +193,7 @@ on the first attempt, in 7 minutes. `test-c130.py` holds its path in place.
 | 75 | back to Arista on the C-200 no longer removes `pri` | the write set `pri 1` and then deleted `pri` in the same script, because `pri` is also among the install's variables. The C-200 came up on Arista all the same on 2026-11-15; which slot the boot loader chose without it was not looked at. A name that is being set is now never also removed, and `bootargs` follows the slot being set (`test-c200.py`) |
 | 76 | the kept copy of Arista has its own settings | sent to Arista's slot 1 through the install's own fallback, the C-130 started there (a slightly older build of 13.0.2) and refused `config` / `config`, which the copy in slot 0 had accepted all night. The W-318 did the same on 2026-11-15. The "switch back" question on the W-318, C-200 and C-130 now says so, and that the reset button brings the factory login back |
 | 77 | `test_releases.py` has its own release cache | it points the tool's default cache at a scratch folder before any check runs |
+| 78 | `--make-stick DIR`: the C-360's installer files onto a USB drive | with no AP: the release's RAM installer and `factory.ubi` go to `c360/` on a FAT32 drive (or into a folder to copy to one) with the `SHA256SUMS` that `arista-c360-install` reads and a `README.txt` holding the U-Boot line, which powers the USB port before `usb start`. Each copy is read back; a drive Windows reports as not FAT stops it before the download. Against release 159 the images, the sums and the U-Boot line are byte for byte what the port's `c360-make-stick.py` writes. A stick install still starts at the console cable, and none has been done on a unit. `test-stick.py` (18 checks, a faked release, no drive) |
 
 Read on that unit before the install, because the kept slot depends on it:
 Arista 13.x can rewrite the *other* slot by itself, from its management
@@ -259,6 +260,8 @@ network gets into that copy of Arista.
   fallback was then run on purpose: Arista started from slot 1. Not yet on
   this model: the switch back with the tool, a second install, and an install
   from a published release.
+- **Not yet:** an install on a C-360 from a drive made by `--make-stick` (the
+  files match the port's stick maker; nobody has installed from either).
 - **Not yet, with 2.0:** a restore on a C-230, C-260, C-360 or C-460; `--update` on a unit; an
   install on a C-230, C-260 or C-460 (their steps are 1.3's, called in the same
   order).

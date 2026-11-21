@@ -158,6 +158,7 @@ python arista-field.py --host 192.168.1.50 --install --yes   # no questions
 python arista-field.py --host 192.168.1.51 --update          # an AP already on OpenWrt
 python arista-field.py --host 192.168.1.51 --restore backups/c260-<mac>/<date>
 python arista-field.py --list-releases               # what each release carries
+python arista-field.py --make-stick E:               # C-360: its installer files onto a FAT32 USB drive
 python arista-field.py --verbose ...                 # every detail on screen
 ```
 
