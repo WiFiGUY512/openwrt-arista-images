@@ -7,7 +7,7 @@ replaces part of the AP's firmware, at your own risk; the installer saves the
 AP's own firmware first and can put it back.
 
 > **There are two repositories.**
-> - **This one, `openwrt-arista-images`, is where you install from:** the
+> - **This one, `openwrt-arista-installer`, is where you install from:** the
 >   network installer (in `install/`) and the built images (the releases).
 > - **[openwrt-arista](https://github.com/WiFiGUY512/openwrt-arista) is the
 >   source code** the images are built from. You do not need it to install.
@@ -19,13 +19,13 @@ On a PC on the same network as the AP. No console cable.
 **Windows** (PowerShell):
 
 ```powershell
-irm https://raw.githubusercontent.com/WiFiGUY512/openwrt-arista-images/main/install/get.ps1 | iex
+irm https://raw.githubusercontent.com/WiFiGUY512/openwrt-arista-installer/main/install/get.ps1 | iex
 ```
 
 **macOS or Linux:**
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/WiFiGUY512/openwrt-arista-images/main/install/get.sh | sh
+curl -fsSL https://raw.githubusercontent.com/WiFiGUY512/openwrt-arista-installer/main/install/get.sh | sh
 ```
 
 It finds the AP, reads its model, picks the build for that model, asks one

@@ -1,6 +1,6 @@
 # OpenWrt for Arista access points: download the network installer and run it.
 #
-#   irm https://raw.githubusercontent.com/WiFiGUY512/openwrt-arista-images/main/install/get.ps1 | iex
+#   irm https://raw.githubusercontent.com/WiFiGUY512/openwrt-arista-installer/main/install/get.ps1 | iex
 #
 # It keeps everything in one folder, %USERPROFILE%\arista-openwrt: the installer,
 # its own private copy of the one Python library it needs, the firmware it saves
@@ -8,7 +8,7 @@
 # Run the same line again later to get the newest installer.
 
 $ErrorActionPreference = 'Stop'
-$base = if ($env:ARISTA_OPENWRT_BASE) { $env:ARISTA_OPENWRT_BASE } else { 'https://raw.githubusercontent.com/WiFiGUY512/openwrt-arista-images/main/install' }
+$base = if ($env:ARISTA_OPENWRT_BASE) { $env:ARISTA_OPENWRT_BASE } else { 'https://raw.githubusercontent.com/WiFiGUY512/openwrt-arista-installer/main/install' }
 $dir  = if ($env:ARISTA_OPENWRT_DIR) { $env:ARISTA_OPENWRT_DIR } else { Join-Path $HOME 'arista-openwrt' }
 
 function Find-Python {

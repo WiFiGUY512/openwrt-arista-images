@@ -60,7 +60,7 @@ except Exception:
     pass
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = "WiFiGUY512/openwrt-arista-images"
+REPO = "WiFiGUY512/openwrt-arista-installer"
 # The GitHub API.  ARISTA_FIELD_API points it elsewhere (the tests' local mock).
 API = os.environ.get("ARISTA_FIELD_API", "https://api.github.com").rstrip("/")
 # A release's index.json lists the models it carries and their files (schema 1,

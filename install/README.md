@@ -6,13 +6,13 @@ to open.
 **Windows** (PowerShell):
 
 ```powershell
-irm https://raw.githubusercontent.com/WiFiGUY512/openwrt-arista-images/main/install/get.ps1 | iex
+irm https://raw.githubusercontent.com/WiFiGUY512/openwrt-arista-installer/main/install/get.ps1 | iex
 ```
 
 **macOS or Linux:**
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/WiFiGUY512/openwrt-arista-images/main/install/get.sh | sh
+curl -fsSL https://raw.githubusercontent.com/WiFiGUY512/openwrt-arista-installer/main/install/get.sh | sh
 ```
 
 It needs Python 3.8 or newer and tells you how to get it if it is missing.

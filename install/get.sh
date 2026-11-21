@@ -1,7 +1,7 @@
 #!/bin/sh
 # OpenWrt for Arista access points: download the network installer and run it.
 #
-#   curl -fsSL https://raw.githubusercontent.com/WiFiGUY512/openwrt-arista-images/main/install/get.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/WiFiGUY512/openwrt-arista-installer/main/install/get.sh | sh
 #
 # It keeps everything in one folder, ~/arista-openwrt: the installer, its own
 # private copy of the one Python library it needs, the firmware it saves from
@@ -12,7 +12,7 @@
 #   curl -fsSL .../get.sh | sh -s -- --host 192.168.1.50
 
 set -eu
-base="${ARISTA_OPENWRT_BASE:-https://raw.githubusercontent.com/WiFiGUY512/openwrt-arista-images/main/install}"
+base="${ARISTA_OPENWRT_BASE:-https://raw.githubusercontent.com/WiFiGUY512/openwrt-arista-installer/main/install}"
 dir="${ARISTA_OPENWRT_DIR:-$HOME/arista-openwrt}"
 
 py=""

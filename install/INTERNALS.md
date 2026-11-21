@@ -171,7 +171,7 @@ can RAM-boot the installer by hand without writing anything.
 ## Where the images come from
 
 - **This PC** fetches the release from GitHub:
-  `WiFiGUY512/openwrt-arista-images` (public; the assets download anonymously).
+  `WiFiGUY512/openwrt-arista-installer` (public; the assets download anonymously).
   Releases come out one per build and not every one carries every model, so
   **without `--tag` the tool takes the newest accepted release that actually
   has this AP's model**, newest first by publication date. Accepted means not

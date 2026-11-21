@@ -2,7 +2,7 @@
 
 Every entry below is a change forced by something that actually happened on a
 unit, not a tidy-up. The commit ids are in the public repo
-`WiFiGUY512/openwrt-arista-images`, under `install/`.
+`WiFiGUY512/openwrt-arista-installer`, under `install/`.
 
 ## 2026-10-25 — first day, C-230
 
