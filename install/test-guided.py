@@ -297,7 +297,7 @@ del af.MODELS["c130"]["no_image"]
 af.MODELS["c200"]["field_install"] = False
 s = Script(STOCK_C200, [], argv=["--host", "192.168.1.63"]).run()
 check("a model the tool cannot install: refused before any login for a shell, with the by-hand page",
-      s.died and not (set(s.calls) & WRITERS) and "c200/INSTALL.md" in s.out
+      s.died and not (set(s.calls) & WRITERS) and "c200/BY-HAND.md" in s.out
       and "Nothing was changed" in s.out, s.out[-400:])
 del af.MODELS["c200"]["field_install"]
 

@@ -4,8 +4,8 @@ This is the detail behind [README.md](README.md): how `arista-field.py` gets
 into an AP, what it writes, and what differs per model. To install an AP you
 do not need any of it.
 
-`arista-field.py` puts OpenWrt on an Arista C-230, C-260, C-360 or C-460 **or
-puts that AP's own firmware back**, over the network, with no serial cable.
+`arista-field.py` puts OpenWrt on an Arista access point **or puts that AP's
+own firmware back**, over the network, with no serial cable.
 
 It is built around one rule: **an AP in the wild may be the only copy of its own
 firmware.** So it downloads the AP's flash first, verifies every byte of it, and
@@ -225,9 +225,9 @@ Notes that matter for the C-260:
   genuinely spare and the install replaces the spare. With `pri=0` the running
   Arista is in slot 0: the installer warns, and the backup taken in step 3 is
   what puts it back.
-- **No USB stick needed.** The C-260's installer wants a stick when it takes its
-  own backup; this tool passes `--no-backup` and keeps the backup here instead,
-  so `/tmp` on the AP is enough.
+- **The backup stays on the PC.** The C-260's own installer can take a backup
+  to a drive on the AP; this tool passes `--no-backup` and keeps the backup
+  here instead, so `/tmp` on the AP is enough.
 - **The way in works on the C-260 too.** Its factory shell is a readable script,
   and its own firmware has the same chain this tool uses -- checked on
   2026-10-25 in the slot-1 image of a C-260 backup, firmware 11.0.1-49: `sensor-shell.sh:533`

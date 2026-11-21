@@ -1,7 +1,7 @@
 # Install OpenWrt on an Arista access point, over the network
 
-One command, on a PC on the same network as the AP. No console cable, no USB
-stick, nothing to open.
+One command, on a PC on the same network as the AP. No console cable, nothing
+to open.
 
 **Windows** (PowerShell):
 
@@ -121,10 +121,9 @@ and checks them byte for byte.
 
 On the W-118, W-318, C-200 and C-130 the same choice is quicker: it changes
 the boot setting only, and the AP starts the copy of Arista's firmware the
-install left in place. On the W-318, C-200 and
-C-130 that is the copy in the second slot, and it keeps its own settings: if
-it refuses `config` / `config`, press the AP's reset button once it has
-finished starting.
+install left in place. On the W-318, C-200 and C-130 that is the copy in the
+second slot, and it keeps its own settings: if it refuses `config` /
+`config`, press the AP's reset button once it has finished starting.
 
 ## If something goes wrong
 
@@ -142,7 +141,6 @@ nothing.
 | A partition did not arrive / the installer never answered | The PC's firewall is blocking the AP. Allow Python through it and run again. If the PC has a VPN on, turn it off for the install, or give the PC's address on the AP's network with `--pc-ip`. |
 | The AP has a different address afterwards | Expected. Arista's firmware and OpenWrt ask the router for an address in different ways, so the router may give each its own. The tool follows the AP by its MAC and prints where it is. |
 | The installer never answered, and the firewall is open | The AP's network needs a DHCP server. |
-| The AP cannot be installed over the network yet | That model installs [by hand](BY-HAND.md). |
 
 Every run writes a full log; its path is on the last line. Open an issue with
 that file if you are stuck.
@@ -184,8 +182,17 @@ logs/field-run-<date>/run.log    everything a run did, with the time
 
 ## More
 
-- [BY-HAND.md](BY-HAND.md): installing with a console cable (every model), and
-  the USB stick.
+- Each model's notes for after the install (which port to cable, the Wi-Fi
+  country, and so on) are in the port's repository:
+  [C-200](https://github.com/WiFiGUY512/openwrt-arista/blob/main/c200/INSTALL.md),
+  [C-230](https://github.com/WiFiGUY512/openwrt-arista/blob/main/c230/INSTALL.md),
+  [C-260](https://github.com/WiFiGUY512/openwrt-arista/blob/main/c260/INSTALL.md),
+  [C-360](https://github.com/WiFiGUY512/openwrt-arista/blob/main/c360/INSTALL.md),
+  [C-460](https://github.com/WiFiGUY512/openwrt-arista/blob/main/c460/INSTALL.md),
+  [W-118](https://github.com/WiFiGUY512/openwrt-arista/blob/main/w118/INSTALL.md),
+  [W-318](https://github.com/WiFiGUY512/openwrt-arista/blob/main/w318/INSTALL.md).
+- [BY-HAND.md](BY-HAND.md): the console-cable procedure, for an AP this tool
+  cannot reach or log in to.
 - [INTERNALS.md](INTERNALS.md): how the tool gets in, what it writes, and the
   per-model details.
 - [ITERATIONS.md](ITERATIONS.md): what changed in the tool and why.

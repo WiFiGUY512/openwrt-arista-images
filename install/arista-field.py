@@ -359,13 +359,13 @@ def files_for(model, purpose=None):
 
 
 def field_install(model):
-    """Whether this tool installs and restores this model itself.  The W-318
-    and W-118 are in the releases (--list-releases, --fetch) but are installed
-    by hand for now."""
+    """Whether this tool installs and restores this model itself.  A model
+    marked False is still in the releases (--list-releases, --fetch) and is
+    pointed at its by-hand page.  No model is marked so today."""
     return MODELS[model].get("field_install", True)
 
 
-BY_HAND = "https://github.com/WiFiGUY512/openwrt-arista/blob/main/%s/INSTALL.md"
+BY_HAND = "https://github.com/WiFiGUY512/openwrt-arista/blob/main/%s/BY-HAND.md"
 
 
 def refuse_unsupported(model):
@@ -950,7 +950,7 @@ MODELS = {
         "device": "arista_c-360",
         # OpenWrt main's FIT configuration for this board, and the load address
         # its size needs: the C-360's image goes to 0xA0000000, not 0x60000000
-        # (from c360/INSTALL.md).
+        # (from c360/BY-HAND.md).
         "fit_cfg": "config@hk09",
         "load_addr": "0xA0000000",
         "installer": "arista-c360-install",
@@ -1122,7 +1122,7 @@ MODELS = {
         # Its image carries no installer script, so the steps are made here
         # (do_install_ubiformat): the boot command first, then slot 0.  The
         # variables are the ones the unit has booted with since 2026-11-02
-        # (c200/INSTALL.md in the port); pri=1 makes Arista's own boot use
+        # (c200/BY-HAND.md in the port); pri=1 makes Arista's own boot use
         # slot 1, the slot that is kept.
         "install_by": "ubiformat",
         "install_env": (
@@ -1221,7 +1221,7 @@ MODELS = {
         "load_addr": "0x44000000",
         # eMMC + NOR, not NAND: the slots are GPT partitions, and the install is
         # the sysupgrade image (kernel FIT to 0:HLOS, squashfs to rootfs) from
-        # the RAM installer, after one boot-command write (c460/INSTALL.md).
+        # the RAM installer, after one boot-command write (c460/BY-HAND.md).
         "storage": "emmc",
         "image": "sysupgrade",
         "emmc_disk": "mmcblk0",
@@ -3397,7 +3397,7 @@ def do_install_emmc(run, card, ip, image, _sums):
     own eMMC path: the kernel FIT to 0:HLOS and the squashfs to rootfs, Arista's
     slot 1 (0:HLOS_1 / rootfs_1) left as the fallback.  One U-Boot environment
     write first sets the boot command: OpenWrt from slot 0, falling back to
-    Arista at pri=1 if 0:HLOS holds no bootable image.  See c460/INSTALL.md."""
+    Arista at pri=1 if 0:HLOS holds no bootable image.  See c460/BY-HAND.md."""
     con = run.installer
     d = MODELS[card["model"]]
     m.say("")
